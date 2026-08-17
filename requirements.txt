@@ -1,0 +1,8 @@
+# sagex-cli dependencies
+
+# TUI framework — draws the full-screen terminal app
+textual==8.2.8
+
+# Developer tools for Textual (textual run --dev, console, etc.)
+# Only needed while developing, not for running the app in production.
+textual-dev==1.8.0
