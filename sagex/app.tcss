@@ -1,0 +1,26 @@
+/* sagex styling (Textual CSS). Loaded by SagexApp via CSS_PATH = "app.tcss". */
+
+Horizontal {
+    height: 1fr;                 /* fill space between header and footer */
+}
+
+/* One uniform background: make the header, footer, AND the tree all
+   transparent so the single screen background shows through everywhere. */
+Header, Footer, Tree {
+    background: transparent;
+}
+
+#resources {
+    width: 30%;                  /* left panel takes 30% of the width */
+    border: round $primary;
+}
+
+#autobot {
+    width: 70%;                  /* right panel takes the remaining 70% */
+    border: round $accent;
+}
+
+#chat-log {
+    height: 1fr;                 /* fill all the space above the input box */
+    padding: 0 1;                /* breathing room from the border */
+}
