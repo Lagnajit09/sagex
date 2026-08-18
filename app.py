@@ -1,4 +1,4 @@
-"""sagex — two-panel terminal app skeleton.
+r"""sagex — two-panel terminal app skeleton.
 
 Run it with:
     d:\codingISFun\sagex-cli\.venv\Scripts\python.exe app.py
@@ -7,8 +7,8 @@ Run it with:
 from rich.text import Text                       # a string that can carry color/style
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import Header, Footer, Static, Tree
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Header, Footer, Tree, Input, RichLog
 
 
 # --- Run status -> (icon, color). One place to change how a status looks. ---
@@ -55,19 +55,16 @@ class sagex(App):
         width: 70%;                  /* right panel takes the remaining 70% */
         border: round $accent;
     }
+    #chat-log {
+        height: 1fr;                 /* fill all the space above the input box */
+        padding: 0 1;                /* breathing room from the border */
+    }
     """
 
     # Keyboard shortcuts: (key, action, description-shown-in-footer).
     BINDINGS = [
         ("q", "quit", "Quit"),
     ]
-
-    # Shown in the Autobot panel when NO real item is selected (the default).
-    EMPTY_STATE = (
-        "No item selected.\n\n"
-        "Highlight a workflow or script to give Autobot context —\n"
-        "or just start typing to ask anything."
-    )
 
     def compose(self) -> ComposeResult:
         """Declare WHAT is on screen, top to bottom."""
@@ -76,15 +73,18 @@ class sagex(App):
         # A Horizontal container lays its children side by side (left -> right).
         with Horizontal():
             yield Tree("Resources", id="resources")     # the navigable list (left)
-            yield Static(id="autobot")                   # right panel; filled in on_mount
+
+            # The right side is now a VERTICAL stack: message area on top,
+            # an input box docked at the bottom.
+            with Vertical(id="autobot"):
+                yield RichLog(id="chat-log", wrap=True, markup=False)   # scrolling messages
+                yield Input(placeholder="Ask Autobot…  (Enter to send)", id="chat-input")
 
         yield Footer()
 
     def on_mount(self) -> None:
         """Runs once, right after the widgets exist. Good place for setup."""
-        autobot = self.query_one("#autobot", Static)
-        autobot.border_title = "Autobot"
-        autobot.update(self.EMPTY_STATE)        # start in the empty state
+        self.query_one("#autobot", Vertical).border_title = "Autobot"
 
         # Grab the Tree. The second argument (Tree) tells the editor/type-checker
         # exactly what kind of widget we got back, so it knows its methods.
@@ -136,14 +136,37 @@ class sagex(App):
         of this method's NAME: on_ + tree + node_highlighted.
         """
         node = event.node
-        autobot = self.query_one("#autobot", Static)
+        chat_input = self.query_one("#chat-input", Input)
 
         # A branch (category header like "Workflows") CAN be expanded; a leaf
         # (a real item like "Deploy Production") CANNOT. `allow_expand` tells them apart.
+        # We show the current selection as a small "context" chip on the input's border.
         if node.allow_expand:
-            autobot.update(self.EMPTY_STATE)                 # on a category -> empty state
+            chat_input.border_subtitle = ""                              # category -> no context
         else:
-            autobot.update(f"Selected: {str(node.label)}")   # on a real item -> show it
+            chat_input.border_subtitle = f"context: {str(node.label)}"   # real item -> show it
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Fires when the user presses Enter in the input box."""
+        text = event.value.strip()
+        if not text:                       # ignore empty / whitespace-only sends
+            return
+        log = self.query_one("#chat-log", RichLog)
+
+        # The user's message: a bold "You:" label followed by their text.
+        user_msg = Text()
+        user_msg.append("You: ", style="bold")
+        user_msg.append(text)
+        log.write(user_msg)
+
+        # Autobot's reply — hardcoded for now; the network comes later.
+        bot_msg = Text()
+        bot_msg.append("Autobot: ", style="bold")
+        bot_msg.append("(placeholder reply — I'm not connected to the server yet.)")
+        log.write(bot_msg)
+
+        log.write("")                      # blank line to separate exchanges
+        event.input.value = ""             # clear the box for the next message
 
 
 if __name__ == "__main__":
