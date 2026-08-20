@@ -4,14 +4,13 @@ Appearance lives in app.tcss; mock data in data.py; status formatting in
 formatting.py. This file focuses on WHAT widgets exist and HOW they react.
 """
 
-from rich.text import Text
-
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Tree, Input, RichLog
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Header, Footer, Tree, Input
 
 from sagex import data
 from sagex.formatting import run_label
+from sagex.widgets.message import ChatMessage
 
 
 class SagexApp(App):
@@ -33,7 +32,7 @@ class SagexApp(App):
 
             # The right side is a vertical stack: scrolling messages + input box.
             with Vertical(id="autobot"):
-                yield RichLog(id="chat-log", wrap=True, markup=False)
+                yield VerticalScroll(id="chat-log")     # scrolls; holds ChatMessage widgets
                 yield Input(placeholder="Ask Autobot…  (Enter to send)", id="chat-input")
 
         yield Footer()
@@ -67,6 +66,16 @@ class SagexApp(App):
         tree.root.add("Triggers")
         tree.root.expand_all()           # start with everything opened up
 
+        # TEMP preview of all four message styles — remove when native commands
+        # are wired up in the next step.
+        self.add_message("Deploy the production build please", role="user")
+        self.add_message("Sure — which environment did you have in mind?", role="autobot")
+        self.add_message("docker ps --filter status=exited", role="command")
+        self.add_message(
+            "CONTAINER ID   IMAGE     STATUS\n3f9c2a1b       db:15     Exited (1) 2 minutes ago",
+            role="cmd_output",
+        )
+
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         """Fires whenever the highlight lands on a tree node (arrows or mouse)."""
         node = event.node
@@ -84,19 +93,16 @@ class SagexApp(App):
         text = event.value.strip()
         if not text:                     # ignore empty / whitespace-only sends
             return
-        log = self.query_one("#chat-log", RichLog)
-
-        # The user's message: a bold "You:" label followed by their text.
-        user_msg = Text()
-        user_msg.append("You: ", style="bold")
-        user_msg.append(text)
-        log.write(user_msg)
-
+        self.add_message(text, role="user")
         # Autobot's reply — hardcoded for now; the network comes later.
-        bot_msg = Text()
-        bot_msg.append("Autobot: ", style="bold")
-        bot_msg.append("(placeholder reply — I'm not connected to the server yet.)")
-        log.write(bot_msg)
-
-        log.write("")                    # blank line to separate exchanges
+        self.add_message(
+            "(placeholder reply — I'm not connected to the server yet.)",
+            role="autobot",
+        )
         event.input.value = ""           # clear the box for the next message
+
+    def add_message(self, text: str, role: str) -> None:
+        """Append a chat message to the log and scroll it into view."""
+        log = self.query_one("#chat-log", VerticalScroll)
+        log.mount(ChatMessage(text, role))
+        self.call_after_refresh(log.scroll_end)   # scroll after the new widget lays out
