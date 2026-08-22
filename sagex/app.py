@@ -12,6 +12,7 @@ from textual.widgets import Header, Footer, Tree, Input
 from sagex import data, shell
 from sagex.formatting import run_label
 from sagex.widgets.message import ChatMessage
+from sagex.widgets.prompt_input import PromptInput
 
 
 class SagexApp(App):
@@ -39,7 +40,7 @@ class SagexApp(App):
             # The right side is a vertical stack: scrolling messages + input box.
             with Vertical(id="autobot"):
                 yield VerticalScroll(id="chat-log")     # scrolls; holds ChatMessage widgets
-                yield Input(
+                yield PromptInput(
                     placeholder="Ask Autobot…   (start with  !  to run a shell command)",
                     id="chat-input",
                 )
@@ -95,6 +96,7 @@ class SagexApp(App):
         event.input.value = ""           # clear the box either way
         if not text:                     # ignore empty / whitespace-only sends
             return
+        self.query_one("#chat-input", PromptInput).add_to_history(text)   # for ↑/↓ recall
 
         if text.startswith("!"):         # "!" prefix -> run as a shell command
             command = text[1:].strip()
