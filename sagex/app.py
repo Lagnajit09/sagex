@@ -109,22 +109,44 @@ class SagexApp(App):
 
     @work(thread=True)
     def execute_command(self, command: str) -> None:
-        """Run a shell command in a BACKGROUND THREAD so the UI stays responsive.
+        """Run a shell command in a BACKGROUND THREAD, streaming its output live.
 
-        Because this runs off the main thread, every UI update must go through
+        This runs off the main thread, so every UI touch goes through
         `call_from_thread`, which hands the work back to Textual's main loop.
         """
         self.call_from_thread(self.add_message, command, "command")
 
-        try:
-            output, code = self.session.run(command)
-        except Exception as exc:         # e.g. the shell itself couldn't start
-            output, code = f"Failed to run command: {exc}", -1
+        # Create the (empty) output block now, then fill it as lines arrive.
+        out = self.call_from_thread(self._new_output_message)
 
-        if not output:
-            output = "(no output)"
-        self.call_from_thread(self.add_message, f"{output}\n[exit code: {code}]", "cmd_output")
+        got_output = False
+
+        def on_line(line: str) -> None:
+            nonlocal got_output
+            got_output = True
+            self.call_from_thread(self._append_output, out, line)
+
+        try:
+            code = self.session.run_streaming(command, on_line)
+        except Exception as exc:         # e.g. the shell itself couldn't start
+            self.call_from_thread(self._append_output, out, f"Failed to run command: {exc}")
+            code = -1
+
+        if not got_output:
+            self.call_from_thread(self._append_output, out, "(no output)")
+        self.call_from_thread(self._append_output, out, f"[exit code: {code}]")
         self.call_from_thread(self._refresh_prompt)   # the working dir may have changed
+
+    def _new_output_message(self) -> ChatMessage:
+        """(main thread) Mount an empty cmd_output block and return it."""
+        widget = ChatMessage("", "cmd_output")
+        self.query_one("#chat-log", VerticalScroll).mount(widget)
+        return widget
+
+    def _append_output(self, widget: ChatMessage, line: str) -> None:
+        """(main thread) Append a line to an output block and scroll to it."""
+        widget.append_line(line)
+        self.query_one("#chat-log", VerticalScroll).scroll_end()
 
     def add_message(self, text: str, role: str) -> None:
         """Append a chat message to the log and scroll it into view."""

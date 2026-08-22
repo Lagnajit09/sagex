@@ -11,6 +11,7 @@ Blocking on purpose — the app calls it from a background thread.
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 
 
 # Friendly name -> the executable to look for on PATH.
@@ -61,23 +62,34 @@ class ShellSession:
         self.shell = self.shells[(i + 1) % len(self.shells)]
         return self.shell
 
-    def run(self, command: str) -> tuple[str, int]:
-        """Run a command, returning (combined_output, exit_code)."""
+    def run_streaming(self, command: str, on_line: Callable[[str], None]) -> int:
+        """Run a command, calling on_line(text) for each output line.
+
+        Returns the exit code. `on_line` is called from the SAME thread this runs
+        on; the caller is responsible for marshalling those lines onto the UI.
+        """
         stripped = command.strip()
 
         # Handle a plain `cd` ourselves so the directory persists across commands.
         is_plain_cd = stripped == "cd" or stripped.startswith("cd ")
         if is_plain_cd and not any(op in stripped for op in _CHAIN_OPS):
-            return self._change_dir(stripped)
+            message, code = self._change_dir(stripped)
+            on_line(message)
+            return code
 
-        result = subprocess.run(
+        proc = subprocess.Popen(
             self._invocation(command),
             cwd=self.cwd,               # run in our tracked directory
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,   # merge stderr into the same stream
             text=True,
+            bufsize=1,                  # line-buffered
+            errors="replace",
         )
-        output = (result.stdout + result.stderr).rstrip()
-        return output, result.returncode
+        for line in proc.stdout:        # blocks until each line arrives, then loops
+            on_line(line.rstrip("\n"))
+        proc.wait()
+        return proc.returncode
 
     def _invocation(self, command: str) -> list[str]:
         """Build the argv list that runs `command` in the chosen shell."""

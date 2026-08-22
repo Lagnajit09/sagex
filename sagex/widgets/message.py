@@ -5,6 +5,8 @@ Supports four kinds of message ("role"), each styled uniquely via a CSS class:
   - "autobot"    : Autobot's reply                     ("Autobot" label)
   - "command"    : a native shell command you ran      (no label, "❯" prompt)
   - "cmd_output" : the output of that command          ("Output" label, muted)
+
+Output blocks grow line-by-line as a command streams (see append_line).
 """
 
 from rich.text import Text
@@ -43,16 +45,25 @@ class ChatMessage(Static):
     """
 
     def __init__(self, text: str, role: str) -> None:
-        content = Text()
+        super().__init__()
+        self._role = role
+        self._body = text
+        self.add_class(role)                 # CSS class: user/autobot/command/cmd_output
+        self._rebuild()
 
-        if role == "command":
-            content.append("❯ ", style="bold")      # shell-style prompt, no label
+    def _rebuild(self) -> None:
+        """Rebuild the displayed content from the current body text."""
+        content = Text()
+        if self._role == "command":
+            content.append("❯ ", style="bold")       # shell-style prompt, no label
         else:
-            label = ROLE_LABELS.get(role)           # None for "user"
+            label = ROLE_LABELS.get(self._role)      # None for "user"
             if label:
                 content.append(f"{label}\n", style="bold")
+        content.append(self._body)
+        self.update(content)                          # swap in the new renderable
 
-        content.append(text)
-
-        super().__init__(content)
-        self.add_class(role)                        # CSS class: user/autobot/command/cmd_output
+    def append_line(self, line: str) -> None:
+        """Add one line to the body (used for streaming command output)."""
+        self._body = f"{self._body}\n{line}" if self._body else line
+        self._rebuild()
