@@ -9,6 +9,7 @@ Blocking on purpose — the app calls it from a background thread.
 """
 
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -30,10 +31,57 @@ _CANDIDATES = ["powershell", "pwsh", "cmd"] if os.name == "nt" else ["bash", "sh
 # handle it instead of intercepting it as a plain directory change.
 _CHAIN_OPS = ("&", "|", ";")
 
+# Matches ANSI escape sequences (colors, cursor moves, screen clears) so we can
+# strip them out before displaying — otherwise they corrupt our own UI.
+_ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+# Programs that always take over the whole screen — we can't host these in-app.
+_FULLSCREEN = {
+    "top", "htop", "btop", "vi", "vim", "nvim", "nano", "pico", "emacs",
+    "less", "more", "man", "tmux", "screen", "watch",
+}
+# REPLs that are interactive only when launched bare (no script / args).
+_REPLS = {"python", "python3", "node", "irb", "psql", "mysql", "mongo", "ftp", "sftp", "telnet"}
+
+
+def _clean(text: str) -> str:
+    """Remove ANSI escape codes and stray carriage returns from output text."""
+    return _ANSI_RE.sub("", text).replace("\r", "")
+
+
+def is_interactive(command: str) -> bool:
+    """True if the command would need a full interactive terminal (which we can't host)."""
+    tokens = command.strip().split()
+    if not tokens:
+        return False
+    prog = os.path.basename(tokens[0]).lower()
+    if prog.endswith(".exe"):
+        prog = prog[:-4]
+    if prog in _FULLSCREEN:
+        return True
+    return prog in _REPLS and len(tokens) == 1   # bare REPL, no script to run
+
+
+def _wsl_available() -> bool:
+    """True if wsl.exe exists AND at least one distro is installed."""
+    if not shutil.which("wsl.exe"):
+        return False
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "-l", "-q"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return False
+    # `wsl -l -q` output can contain NUL bytes (UTF-16); strip them before checking.
+    return result.returncode == 0 and bool(result.stdout.replace("\x00", "").strip())
+
 
 def available_shells() -> list[str]:
     """Return the shells actually installed, in preference order."""
     found = [name for name in _CANDIDATES if shutil.which(_SHELL_EXES[name])]
+    if os.name == "nt" and _wsl_available():
+        found.append("wsl")             # run Linux commands via wsl.exe
     if not found:
         found = ["cmd"] if os.name == "nt" else ["sh"]
     return found
@@ -70,6 +118,14 @@ class ShellSession:
         """
         stripped = command.strip()
 
+        # Full-screen / interactive programs need a real terminal — refuse politely
+        # instead of hanging or scrambling the UI.
+        if is_interactive(stripped):
+            prog = stripped.split()[0]
+            on_line(f"'{prog}' needs an interactive terminal, which sagex can't host yet.")
+            on_line("Run it in a separate terminal window instead.")
+            return 1
+
         # Handle a plain `cd` ourselves so the directory persists across commands.
         is_plain_cd = stripped == "cd" or stripped.startswith("cd ")
         if is_plain_cd and not any(op in stripped for op in _CHAIN_OPS):
@@ -80,6 +136,7 @@ class ShellSession:
         proc = subprocess.Popen(
             self._invocation(command),
             cwd=self.cwd,               # run in our tracked directory
+            stdin=subprocess.DEVNULL,   # feed EOF so commands that read stdin don't hang
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,   # merge stderr into the same stream
             text=True,
@@ -87,7 +144,7 @@ class ShellSession:
             errors="replace",
         )
         for line in proc.stdout:        # blocks until each line arrives, then loops
-            on_line(line.rstrip("\n"))
+            on_line(_clean(line.rstrip("\n")))   # strip control codes before display
         proc.wait()
         return proc.returncode
 
@@ -97,6 +154,8 @@ class ShellSession:
             return ["cmd.exe", "/c", command]
         if self.shell in ("powershell", "pwsh"):
             return [_SHELL_EXES[self.shell], "-NoProfile", "-Command", command]
+        if self.shell == "wsl":
+            return ["wsl.exe", "bash", "-c", command]     # Linux command in WSL
         return [_SHELL_EXES[self.shell], "-c", command]   # bash / sh
 
     def _change_dir(self, command: str) -> tuple[str, int]:

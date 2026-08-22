@@ -98,8 +98,12 @@ class SagexApp(App):
 
         if text.startswith("!"):         # "!" prefix -> run as a shell command
             command = text[1:].strip()
-            if command:
-                self.execute_command(command)
+            if not command:
+                return
+            if command.lower() in ("clear", "cls"):     # UI builtin: wipe the chat log
+                self.query_one("#chat-log", VerticalScroll).remove_children()
+                return
+            self.execute_command(command)
         else:                            # otherwise -> agent prompt (placeholder for now)
             self.add_message(text, role="user")
             self.add_message(
