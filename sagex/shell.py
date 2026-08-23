@@ -90,9 +90,10 @@ def available_shells() -> list[str]:
 class ShellSession:
     """Runs commands in a chosen shell, remembering the working directory."""
 
-    def __init__(self) -> None:
+    def __init__(self, preferred: str | None = None) -> None:
         self.shells = available_shells()
-        self.shell = self.shells[0]
+        # Use the remembered shell if it's still available, otherwise the default.
+        self.shell = preferred if preferred in self.shells else self.shells[0]
         self.cwd = os.getcwd()
 
     @property

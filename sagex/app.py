@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input
 
-from sagex import data, shell
+from sagex import config, data, shell
 from sagex.formatting import run_label
 from sagex.widgets.message import ChatMessage
 from sagex.widgets.prompt_input import PromptInput
@@ -27,7 +27,8 @@ class SagexApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.session = shell.ShellSession()   # remembers chosen shell + working dir
+        self.config = config.load()                       # persisted settings (~/.sagex)
+        self.session = shell.ShellSession(preferred=self.config.get("shell"))
 
     def compose(self) -> ComposeResult:
         """Declare WHAT is on screen, top to bottom."""
@@ -161,8 +162,10 @@ class SagexApp(App):
         self.call_after_refresh(log.scroll_end)   # scroll after the new widget lays out
 
     def action_cycle_shell(self) -> None:
-        """F2: switch to the next installed shell."""
+        """F2: switch to the next installed shell (and remember the choice)."""
         self.session.cycle_shell()
+        self.config["shell"] = self.session.shell        # persist across launches
+        config.save(self.config)
         self._refresh_prompt()
 
     def _refresh_prompt(self) -> None:
