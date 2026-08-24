@@ -11,6 +11,7 @@ Blocking on purpose — the app calls it from a background thread.
 import os
 import re
 import shutil
+import signal
 import subprocess
 from collections.abc import Callable
 
@@ -37,11 +38,17 @@ _ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 # Programs that always take over the whole screen — we can't host these in-app.
 _FULLSCREEN = {
-    "top", "htop", "btop", "vi", "vim", "nvim", "nano", "pico", "emacs",
+    "top", "htop", "btop", "atop", "glances",
+    "vi", "vim", "nvim", "nano", "pico", "emacs", "micro", "helix", "hx",
     "less", "more", "man", "tmux", "screen", "watch",
+    "lazygit", "lazydocker", "k9s", "ranger", "ncdu", "gdb", "lldb",
 }
 # REPLs that are interactive only when launched bare (no script / args).
-_REPLS = {"python", "python3", "node", "irb", "psql", "mysql", "mongo", "ftp", "sftp", "telnet"}
+_REPLS = {
+    "python", "python3", "node", "irb", "ipython", "bpython",
+    "psql", "mysql", "mongo", "mongosh", "redis-cli", "sqlite3",
+    "ftp", "sftp", "telnet",
+}
 
 
 def _clean(text: str) -> str:
@@ -95,6 +102,7 @@ class ShellSession:
         # Use the remembered shell if it's still available, otherwise the default.
         self.shell = preferred if preferred in self.shells else self.shells[0]
         self.cwd = os.getcwd()
+        self._proc: subprocess.Popen | None = None   # the currently running command
 
     @property
     def prompt(self) -> str:
@@ -134,6 +142,13 @@ class ShellSession:
             on_line(message)
             return code
 
+        # Start the command in its OWN process group / session so cancel() can
+        # kill the whole tree (the shell AND whatever it spawned), not just the top.
+        group_kwargs = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
         proc = subprocess.Popen(
             self._invocation(command),
             cwd=self.cwd,               # run in our tracked directory
@@ -143,11 +158,41 @@ class ShellSession:
             text=True,
             bufsize=1,                  # line-buffered
             errors="replace",
+            **group_kwargs,
         )
-        for line in proc.stdout:        # blocks until each line arrives, then loops
-            on_line(_clean(line.rstrip("\n")))   # strip control codes before display
-        proc.wait()
-        return proc.returncode
+        self._proc = proc               # expose it so cancel() can reach it
+        try:
+            for line in proc.stdout:    # blocks until each line arrives, then loops
+                on_line(_clean(line.rstrip("\n")))   # strip control codes before display
+            proc.wait()
+            return proc.returncode
+        finally:
+            self._proc = None           # command finished (or was killed)
+
+    def is_running(self) -> bool:
+        """True while a command is executing."""
+        return self._proc is not None and self._proc.poll() is None
+
+    def cancel(self) -> bool:
+        """Kill the running command and its children. Returns True if one was running."""
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            if os.name == "nt":
+                # taskkill /T terminates the whole process tree (shell + children).
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)   # kill the group
+        except Exception:
+            try:
+                proc.kill()                                       # last-resort fallback
+            except Exception:
+                pass
+        return True
 
     def _invocation(self, command: str) -> list[str]:
         """Build the argv list that runs `command` in the chosen shell."""

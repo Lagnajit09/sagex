@@ -23,12 +23,14 @@ class SagexApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("f2", "cycle_shell", "Shell"),
+        ("escape", "stop_command", "Stop"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self.config = config.load()                       # persisted settings (~/.sagex)
         self.session = shell.ShellSession(preferred=self.config.get("shell"))
+        self._busy = False                                # is a command currently running?
 
     def compose(self) -> ComposeResult:
         """Declare WHAT is on screen, top to bottom."""
@@ -106,6 +108,13 @@ class SagexApp(App):
             if command.lower() in ("clear", "cls"):     # UI builtin: wipe the chat log
                 self.query_one("#chat-log", VerticalScroll).remove_children()
                 return
+            if self._busy:                              # one command at a time
+                self.add_message(
+                    "⚠ A command is already running — press Esc to stop it first.",
+                    role="autobot",
+                )
+                return
+            self._busy = True
             self.execute_command(command)
         else:                            # otherwise -> agent prompt (placeholder for now)
             self.add_message(text, role="user")
@@ -142,7 +151,7 @@ class SagexApp(App):
         if not got_output:
             self.call_from_thread(self._append_output, out, "(no output)")
         self.call_from_thread(self._append_output, out, f"[exit code: {code}]")
-        self.call_from_thread(self._refresh_prompt)   # the working dir may have changed
+        self.call_from_thread(self._finish_command)   # clear busy flag + refresh prompt
 
     def _new_output_message(self) -> ChatMessage:
         """(main thread) Mount an empty cmd_output block and return it."""
@@ -160,6 +169,15 @@ class SagexApp(App):
         log = self.query_one("#chat-log", VerticalScroll)
         log.mount(ChatMessage(text, role))
         self.call_after_refresh(log.scroll_end)   # scroll after the new widget lays out
+
+    def action_stop_command(self) -> None:
+        """Esc: stop the currently running command, if any."""
+        self.session.cancel()            # kills the process; the worker then finishes
+
+    def _finish_command(self) -> None:
+        """(main thread) Called when a command finishes — clear the busy flag."""
+        self._busy = False
+        self._refresh_prompt()           # the working dir may have changed
 
     def action_cycle_shell(self) -> None:
         """F2: switch to the next installed shell (and remember the choice)."""
