@@ -10,3 +10,9 @@ rich==15.0.0
 # Developer tools for Textual (textual run --dev, console, etc.)
 # Only needed while developing, not for running the app in production.
 textual-dev==1.8.0
+
+# HTTP client for talking to the Autosage backend API.
+httpx==0.28.1
+
+# OS keychain access for storing the API key securely (never in plaintext).
+keyring==25.7.0

@@ -13,7 +13,8 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # Every setting the app understands, with its default value.
 DEFAULTS = {
-    "shell": None,        # None = auto-detect the default shell
+    "shell": None,                        # None = auto-detect the default shell
+    "api_url": "http://localhost:8080",   # Autosage backend (nginx compose stack)
 }
 
 
