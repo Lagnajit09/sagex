@@ -6,6 +6,7 @@ losing a preference is not worth interrupting the user.
 """
 
 import json
+import os
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".sagex"
@@ -37,3 +38,14 @@ def save(settings: dict) -> None:
             json.dump(settings, f, indent=2)
     except OSError:
         pass                          # can't write? oh well — don't crash
+
+
+def resolve_workspace(path: str) -> str:
+    """Expand + resolve a workspace path to an absolute one, or raise ValueError.
+
+    Relative paths resolve against the current directory. Env vars and ~ expand.
+    """
+    resolved = os.path.abspath(os.path.expanduser(os.path.expandvars((path or "").strip())))
+    if not os.path.isdir(resolved):
+        raise ValueError(f"Not a folder: {resolved}")
+    return resolved

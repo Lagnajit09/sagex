@@ -10,9 +10,23 @@ Header, Footer, Tree {
     background: transparent;
 }
 
-#resources {
+#resources-panel {
     width: 30%;                  /* left panel takes 30% of the width */
     border: round $primary;
+}
+#resources {
+    height: 1fr;                 /* tree fills the panel above the status bar */
+}
+#workspace-input {
+    height: auto;               /* the local-env path box (shown only in local) */
+}
+#workspace-tree {
+    height: 1fr;                 /* local file tree fills the same space */
+}
+#resources-status {
+    height: auto;               /* 0 rows when empty, one line when it has text */
+    color: $text-muted;
+    padding: 0 1;
 }
 
 #autobot {
