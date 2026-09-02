@@ -9,7 +9,8 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input
 
-from sagex import config, data, shell
+from sagex import config, shell
+from sagex.api import ApiError, build_client, resources
 from sagex.formatting import run_label
 from sagex.widgets.message import ChatMessage
 from sagex.widgets.prompt_input import PromptInput
@@ -58,28 +59,26 @@ class SagexApp(App):
         tree.border_title = "Resources"
         tree.show_root = False           # show categories at the top level
 
-        # Build each category from the mock data in data.py.
+        # Build categories with a "Loading…" placeholder, then fetch each from the
+        # real API off the main thread (see _load_branch). Runs get status icons.
         workflows = tree.root.add("Workflows")
-        for name in data.WORKFLOWS:
-            workflows.add_leaf(name)
-
+        workflows.add_leaf("Loading…")
         scripts = tree.root.add("Scripts")
-        for name in data.SCRIPTS:
-            scripts.add_leaf(name)
-
+        scripts.add_leaf("Loading…")
         vault = tree.root.add("Vault")
-        for name in data.VAULT:
-            vault.add_leaf(name)
-
-        # Runs is the only category with status icons — a run has a real outcome.
+        vault.add_leaf("Loading…")
         runs = tree.root.add("Runs")
-        for status, name, when in data.RECENT_RUNS:
-            runs.add_leaf(run_label(status, name, when))
-
+        runs.add_leaf("Loading…")
         tree.root.add("Triggers")
         tree.root.expand_all()           # start with everything opened up
 
         self._refresh_prompt()           # show "shell · cwd" on the input border
+
+        # Kick off the loaders — they run concurrently in background threads.
+        self._load_branch(workflows, resources.list_workflows)
+        self._load_branch(scripts, resources.list_scripts)
+        self._load_branch(vault, resources.list_vault_resources)
+        self._load_branch(runs, lambda c: [run_label(*r) for r in resources.list_recent_runs(c)])
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         """Fires whenever the highlight lands on a tree node (arrows or mouse)."""
@@ -189,3 +188,27 @@ class SagexApp(App):
     def _refresh_prompt(self) -> None:
         """Show 'shell · cwd' on the input box's top border."""
         self.query_one("#chat-input", Input).border_title = self.session.prompt
+
+    @work(thread=True)
+    def _load_branch(self, node, fetch) -> None:
+        """Fetch display labels for a tree branch in a background thread.
+
+        `fetch` takes an ApiClient and returns a list of labels (str or Text).
+        """
+        try:
+            labels = fetch(build_client())
+        except ApiError as exc:
+            self.call_from_thread(self._fill_branch, node, None, exc.message)
+            return
+        self.call_from_thread(self._fill_branch, node, labels, None)
+
+    def _fill_branch(self, node, labels, error) -> None:
+        """(main thread) Replace a branch's contents with results, or an error line."""
+        node.remove_children()           # clear the "Loading…" placeholder
+        if error:
+            node.add_leaf(f"⚠ {error}")
+        elif not labels:
+            node.add_leaf("(none)")
+        else:
+            for label in labels:
+                node.add_leaf(label)
