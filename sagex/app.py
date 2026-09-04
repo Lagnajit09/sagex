@@ -13,7 +13,7 @@ from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 
 from sagex import config, shell
 from sagex.api import ApiError, build_client, resources, store
-from sagex.formatting import run_label
+from sagex.formatting import run_label, trigger_label
 from sagex.widgets.message import ChatMessage
 from sagex.widgets.prompt_input import PromptInput
 
@@ -82,7 +82,7 @@ class SagexApp(App):
         scripts = tree.root.add("Scripts")
         vault = tree.root.add("Vault")
         runs = tree.root.add("Runs")
-        tree.root.add("Triggers")
+        triggers = tree.root.add("Triggers")
         tree.root.expand_all()
 
         # (branch node, fetch function) pairs — reused by refresh.
@@ -91,6 +91,7 @@ class SagexApp(App):
             (scripts, resources.list_scripts),
             (vault, resources.list_vault_resources),
             (runs, lambda c: [run_label(*r) for r in resources.list_recent_runs(c)]),
+            (triggers, lambda c: [trigger_label(*t) for t in resources.list_triggers(c)]),
         ]
 
         self._refresh_prompt()           # show "shell · cwd" on the input border
@@ -302,4 +303,4 @@ class SagexApp(App):
             node.add_leaf("(none)")
         else:
             for label in labels:
-                node.add_leaf(label)
+                node.add_leaf(label)   # names already trimmed at construction (metadata kept)
