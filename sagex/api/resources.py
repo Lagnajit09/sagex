@@ -93,3 +93,85 @@ def list_recent_runs(client: ApiClient, limit: int = 5) -> list[tuple[str, str, 
         )
         for r in runs[:limit]
     ]
+
+
+# ---------------------------------------------------------------------------
+# Single-resource lookup ("show" / "copy"): resolve a name-or-id reference to
+# one record, then fetch its full detail. Shared by the CLI and (later) the TUI.
+# ---------------------------------------------------------------------------
+
+
+class ResourceNotFound(Exception):
+    """No resource matched the given reference."""
+
+    def __init__(self, kind: str, ref: str) -> None:
+        super().__init__(f"No {kind} matching '{ref}'.")
+        self.kind = kind
+        self.ref = ref
+
+
+class AmbiguousResource(Exception):
+    """A name matched more than one resource — the caller must pick by id.
+
+    `matches` is a list of {id, name, hint} dicts for display.
+    """
+
+    def __init__(self, kind: str, ref: str, matches: list[dict]) -> None:
+        super().__init__(f"Multiple {kind}s match '{ref}'.")
+        self.kind = kind
+        self.ref = ref
+        self.matches = matches
+
+
+def _match(items: list[dict], ref: str, *, id_key: str = "id", name_key: str = "name") -> list[dict]:
+    """Find items by EXACT id first (fast, unambiguous), else case-insensitive name.
+
+    Returns every name match so the caller can detect ambiguity (len > 1).
+    """
+    for it in items:                                  # exact id wins outright
+        if str(it.get(id_key)) == ref:
+            return [it]
+    ref_l = ref.strip().lower()
+    return [it for it in items if str(it.get(name_key) or "").lower() == ref_l]
+
+
+def resolve_workflow(client: ApiClient, ref: str) -> dict:
+    """Resolve a workflow name-or-id and return its FULL detail (incl. nodes/edges).
+
+    The list endpoint strips the graph; only the detail endpoint returns it.
+    """
+    items = _as_list(client.get("/api/workflows/"))
+    hits = _match(items, ref)
+    if not hits:
+        raise ResourceNotFound("workflow", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("workflow", ref, [
+            {"id": w.get("id"), "name": w.get("name") or "(unnamed)",
+             "hint": f"modified {_relative_time(w.get('modified_at'))}"}
+            for w in hits
+        ])
+    return client.get(f"/api/workflows/{hits[0]['id']}/")
+
+
+def resolve_script(client: ApiClient, ref: str) -> dict:
+    """Resolve a script name-or-id and return its metadata record (no code body).
+
+    Script ids are ints (unlike workflows' UUIDs); the code lives in a separate
+    content endpoint — see `get_script_content`.
+    """
+    items = _as_list(client.get("/api/scripts/"))
+    hits = _match(items, ref)
+    if not hits:
+        raise ResourceNotFound("script", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("script", ref, [
+            {"id": s.get("id"), "name": s.get("name") or "(unnamed)",
+             "hint": f"v{s.get('version')} · updated {_relative_time(s.get('updated_at'))}"}
+            for s in hits
+        ])
+    return client.get(f"/api/scripts/{hits[0]['id']}/")
+
+
+def get_script_content(client: ApiClient, script_id) -> dict:
+    """Fetch a script's raw code: {id, name, content, content_type, version}."""
+    return client.get(f"/api/scripts/{script_id}/content/")

@@ -9,10 +9,21 @@ Typer parses the command line: with no subcommand, the callback launches the TUI
 otherwise the matching `auth` command runs as a plain CLI action.
 """
 
+import sys
+
 import typer
 
-from sagex import __version__, config
-from sagex.api import ApiError, build_client
+# Windows terminals often default to a legacy code page (cp1252) that can't encode
+# characters like ✓/✗, which would crash typer.echo / Rich mid-output. Force UTF-8
+# so output is safe regardless of the console's codepage.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+from sagex import __version__, config, render
+from sagex.api import ApiError, build_client, resources
 from sagex.api import store
 from sagex.app import SagexApp
 
@@ -26,6 +37,9 @@ app.add_typer(auth_app, name="auth")
 
 workspace_app = typer.Typer(help="Manage the local workspace folder.")
 app.add_typer(workspace_app, name="workspace")
+
+show_app = typer.Typer(help="Show a single resource's details in the terminal.")
+app.add_typer(show_app, name="show")
 
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
@@ -95,6 +109,61 @@ def workspace_show() -> None:
     """Show the current workspace folder."""
     ws = config.load().get("workspace")
     typer.echo(ws or "(not set — defaults to the current directory)")
+
+
+def _client_or_exit() -> "build_client":
+    """Return an API client, or exit early with a friendly message if no key."""
+    if not store.get_key():
+        typer.echo("Not logged in. Run:  sagex auth login")
+        raise typer.Exit(code=1)
+    return build_client()
+
+
+def _resolve_or_exit(resolve, client, ref: str, kind: str):
+    """Run a resolver, turning its expected errors into clean CLI exits."""
+    try:
+        return resolve(client, ref)
+    except resources.AmbiguousResource as exc:
+        render.ambiguous(exc)
+        raise typer.Exit(code=1)
+    except resources.ResourceNotFound as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+
+@show_app.command("workflow")
+def show_workflow_cmd(
+    ref: str = typer.Argument(..., help="Workflow name or id."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+) -> None:
+    """Show a workflow's details (including its nodes and edges)."""
+    client = _client_or_exit()
+    wf = _resolve_or_exit(resources.resolve_workflow, client, ref, "workflow")
+    render.print_json(wf) if json_out else render.workflow(wf)
+
+
+@show_app.command("script")
+def show_script_cmd(
+    ref: str = typer.Argument(..., help="Script name or id."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+    no_content: bool = typer.Option(False, "--no-content", help="Skip the code body."),
+) -> None:
+    """Show a script's metadata and (by default) its code, syntax-highlighted."""
+    client = _client_or_exit()
+    meta = _resolve_or_exit(resources.resolve_script, client, ref, "script")
+    if json_out:
+        render.print_json(meta)
+        return
+    content = None
+    if not no_content:
+        try:
+            content = resources.get_script_content(client, meta["id"])
+        except ApiError as exc:
+            typer.echo(f"(couldn't load code body: {exc.message})")   # still show metadata
+    render.script(meta, content)
 
 
 def _check(raise_on_fail: bool) -> None:

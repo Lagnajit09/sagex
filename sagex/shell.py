@@ -156,8 +156,9 @@ class ShellSession:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,   # merge stderr into the same stream
             text=True,
-            bufsize=1,                  # line-buffered
-            errors="replace",
+            encoding="utf-8",           # decode child output as UTF-8, not the
+            errors="replace",           # locale codepage (cp1252) — else box-drawing
+            bufsize=1,                  # and other non-ASCII output turns to mojibake
             **group_kwargs,
         )
         self._proc = proc               # expose it so cancel() can reach it
@@ -195,14 +196,21 @@ class ShellSession:
         return True
 
     def _invocation(self, command: str) -> list[str]:
-        """Build the argv list that runs `command` in the chosen shell."""
+        """Build the argv list that runs `command` in the chosen shell.
+
+        On Windows we make each shell emit UTF-8 so its output matches how we
+        decode it (encoding="utf-8" above): `chcp 65001` for cmd, and setting
+        the console output encoding for PowerShell. Each command runs a fresh
+        shell process, so these changes are isolated to that one command.
+        """
         if self.shell == "cmd":
-            return ["cmd.exe", "/c", command]
+            return ["cmd.exe", "/c", f"chcp 65001>nul & {command}"]
         if self.shell in ("powershell", "pwsh"):
-            return [_SHELL_EXES[self.shell], "-NoProfile", "-Command", command]
+            preamble = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+            return [_SHELL_EXES[self.shell], "-NoProfile", "-Command", f"{preamble} {command}"]
         if self.shell == "wsl":
             return ["wsl.exe", "bash", "-c", command]     # Linux command in WSL
-        return [_SHELL_EXES[self.shell], "-c", command]   # bash / sh
+        return [_SHELL_EXES[self.shell], "-c", command]   # bash / sh (UTF-8 by default)
 
     def _change_dir(self, command: str) -> tuple[str, int]:
         """Update self.cwd for a `cd` command. Returns (message, exit_code)."""
