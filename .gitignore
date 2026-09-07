@@ -1,3 +1,8 @@
 CLAUDE.md
 .venv
 **/__pycache__/**
+
+# Packaging build artifacts
+*.egg-info/
+build/
+dist/

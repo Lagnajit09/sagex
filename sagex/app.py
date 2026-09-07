@@ -270,7 +270,7 @@ class SagexApp(App):
     def _update_env_status(self) -> None:
         """Set the bottom status line based on auth state and current environment."""
         if not store.get_key():
-            self._set_status("○ Not authenticated · python -m sagex auth login")
+            self._set_status("○ Not authenticated · sagex auth login")
         elif self._env == "local":
             self._set_status(f"local · {self._workspace}")
         else:

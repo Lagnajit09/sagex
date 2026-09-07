@@ -1,9 +1,9 @@
 """sagex entry point.
 
-    python -m sagex               -> launch the terminal app (TUI)
-    python -m sagex auth login    -> store an API key (paste when prompted)
-    python -m sagex auth status   -> check whether you're authenticated
-    python -m sagex auth logout   -> remove the stored key
+    sagex               -> launch the terminal app (TUI)
+    sagex auth login    -> store an API key (paste when prompted)
+    sagex auth status   -> check whether you're authenticated
+    sagex auth logout   -> remove the stored key
 
 Typer parses the command line: with no subcommand, the callback launches the TUI;
 otherwise the matching `auth` command runs as a plain CLI action.
@@ -11,7 +11,7 @@ otherwise the matching `auth` command runs as a plain CLI action.
 
 import typer
 
-from sagex import config
+from sagex import __version__, config
 from sagex.api import ApiError, build_client
 from sagex.api import store
 from sagex.app import SagexApp
@@ -31,8 +31,21 @@ app.add_typer(workspace_app, name="workspace")
 _VERIFY_PATH = "/api/users/profile/"
 
 
+def _version_callback(value: bool) -> None:
+    """Print the version and exit (an 'eager' option, handled before anything else)."""
+    if value:
+        typer.echo(f"sagex {__version__}")
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def _default(ctx: typer.Context) -> None:
+def _default(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False, "--version", callback=_version_callback, is_eager=True,
+        help="Show the version and exit.",
+    ),
+) -> None:
     """Launch the terminal app when no subcommand is given."""
     if ctx.invoked_subcommand is None:
         SagexApp().run()
@@ -88,7 +101,7 @@ def _check(raise_on_fail: bool) -> None:
     """Verify the stored key against the backend and print the result."""
     key = store.get_key()
     if not key:
-        typer.echo("Not logged in. Run:  python -m sagex auth login")
+        typer.echo("Not logged in. Run:  sagex auth login")
         if raise_on_fail:
             raise typer.Exit(code=1)
         return

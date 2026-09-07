@@ -1,0 +1,55 @@
+# Packaging for sagex-cli.
+#
+# What this gives us:
+#   pip install -e .    -> installs the package in "editable" mode (your source
+#                          stays live; edits take effect without reinstalling)
+#   sagex               -> a real console command, thanks to [project.scripts]
+#                          below (no more `python -m sagex`).
+
+[build-system]
+# The tool that turns this project into an installable package.
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sagex-cli"
+description = "A terminal app for Autosage."
+readme = "README.md"
+requires-python = ">=3.13"
+# Version isn't written here — it's read from sagex/__init__.py (see [tool.setuptools.dynamic]),
+# so there's a single source of truth.
+dynamic = ["version"]
+
+# Runtime dependencies — what a user needs just to RUN sagex. Mirrors
+# requirements.txt, minus textual-dev (a dev-only tool, see [dev] below).
+dependencies = [
+    "textual==8.2.8",
+    "rich==15.0.0",
+    "httpx==0.28.1",
+    "keyring==25.7.0",
+    "typer==0.27.2",
+]
+
+[project.optional-dependencies]
+# Installed only with `pip install -e ".[dev]"` — the Textual dev console etc.
+dev = [
+    "textual-dev==1.8.0",
+]
+
+[project.scripts]
+# This is the line that creates the `sagex` command. It points at the Typer
+# `app` object in sagex/__main__.py; running `sagex ...` calls app(...).
+sagex = "sagex.__main__:app"
+
+[tool.setuptools.dynamic]
+# Read the version from the module attribute, so __init__.py stays authoritative.
+version = { attr = "sagex.__version__" }
+
+[tool.setuptools.packages.find]
+# Ship the sagex package (and its subpackages: api, widgets), nothing else.
+include = ["sagex*"]
+
+[tool.setuptools.package-data]
+# app.tcss isn't a .py file, so it wouldn't be packaged by default. Include it
+# so CSS_PATH still resolves in a real (non-editable) wheel install.
+sagex = ["*.tcss"]
