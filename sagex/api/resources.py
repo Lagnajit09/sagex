@@ -6,7 +6,9 @@ so the UI code just asks for "the list of workflow names" and gets a clean list.
 
 from datetime import datetime, timezone
 
-from sagex.api.client import ApiClient
+import httpx
+
+from sagex.api.client import ApiClient, ApiError
 from sagex.formatting import truncate_name
 
 
@@ -175,3 +177,163 @@ def resolve_script(client: ApiClient, ref: str) -> dict:
 def get_script_content(client: ApiClient, script_id) -> dict:
     """Fetch a script's raw code: {id, name, content, content_type, version}."""
     return client.get(f"/api/scripts/{script_id}/content/")
+
+
+def resolve_run(client: ApiClient, ref: str) -> dict:
+    """Resolve a run by full id, or by an id PREFIX (runs have no names).
+
+    A full UUID is fetched directly; a shorter prefix is matched against the
+    recent-runs list (handy for pasting the first few characters).
+    """
+    ref = ref.strip()
+    if len(ref) == 36 and ref.count("-") == 4:          # looks like a full UUID
+        try:
+            return client.get(f"/api/execution-engine/workflows/runs/{ref}/")
+        except ApiError as exc:
+            if exc.status == 404:
+                raise ResourceNotFound("run", ref)
+            raise
+    runs = _as_list(client.get("/api/execution-engine/workflows/runs/"))
+    hits = [r for r in runs if str(r.get("id", "")).startswith(ref)]
+    if not hits:
+        raise ResourceNotFound("run", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("run", ref, [
+            {"id": r.get("id"), "name": r.get("workflow_name") or "(workflow)",
+             "hint": f"{r.get('status')} · {_relative_time(r.get('created_at'))}"}
+            for r in hits
+        ])
+    return client.get(f"/api/execution-engine/workflows/runs/{hits[0]['id']}/")
+
+
+def get_run_nodes(client: ApiClient, run_id) -> list[dict]:
+    """Per-node results for a run, each with signed log URLs + a `logs_expired` flag."""
+    return _as_list(client.get(f"/api/execution-engine/workflows/runs/{run_id}/nodes/"))
+
+
+def fetch_log_text(url: str) -> str:
+    """Download a signed GCS log URL directly (no API key / envelope) and return text.
+
+    The `*_signed_url` fields point straight at Google Cloud Storage, so this is a
+    plain GET — not routed through ApiClient.
+    """
+    if not url:
+        return ""
+    try:
+        resp = httpx.get(url, timeout=30.0)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ApiError(f"couldn't download log ({exc})")
+    return resp.text
+
+
+def resolve_trigger(client: ApiClient, ref: str) -> tuple[str, dict]:
+    """Resolve a trigger by id or workflow name; return (kind, detail).
+
+    `kind` is "http" or "schedule". Detail comes from the richer per-node endpoint
+    (adds rotated_at / last_run_id), merged with the aggregate item so we keep
+    workflow_name. Only ever exposes `secret_last4`, never a full secret.
+    """
+    data = client.get("/api/triggers/") or {}
+    items = [{**t, "_kind": "http"} for t in data.get("http_triggers", [])]
+    items += [{**t, "_kind": "schedule"} for t in data.get("schedule_triggers", [])]
+
+    hits = _match(items, ref, name_key="workflow_name")
+    if not hits:
+        raise ResourceNotFound("trigger", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("trigger", ref, [
+            {"id": t.get("id"), "name": f"{t.get('workflow_name')} ({t['_kind']})",
+             "hint": f"node {t.get('node_id')}"}
+            for t in hits
+        ])
+
+    t = hits[0]
+    kind = t["_kind"]
+    path = f"/api/workflows/{t.get('workflow_id')}/triggers/{kind}/{t.get('node_id')}/"
+    try:
+        detail = client.get(path) or {}
+    except ApiError:
+        detail = {}                                     # fall back to the aggregate item
+    return kind, {**t, **detail}                        # detail wins; keeps workflow_name
+
+
+def _vault_name(client: ApiClient, vault_id) -> str | None:
+    """Look up a vault's display name from its id (best-effort; None on failure).
+
+    Credentials/servers only carry the vault's UUID; we resolve the friendly name
+    with one targeted call so callers can show it instead of the raw id.
+    """
+    if not vault_id:
+        return None
+    try:
+        return (client.get(f"/api/vault/vaults/{vault_id}/") or {}).get("name")
+    except ApiError:
+        return None
+
+
+def resolve_credential(client: ApiClient, ref: str) -> dict:
+    """Resolve a vault credential (key) by id or name; returns the MASKED record.
+
+    Secret fields are write-only server-side, so this never contains plaintext.
+    Use `reveal_credential` (explicitly) to fetch the actual secret values.
+    Enriched with `vault_name` for display.
+    """
+    items = _as_list(client.get("/api/vault/credentials/"))
+    hits = _match(items, ref)
+    if not hits:
+        raise ResourceNotFound("key", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("key", ref, [
+            {"id": c.get("id"), "name": c.get("name") or "(unnamed)",
+             "hint": c.get("credential_type") or ""}
+            for c in hits
+        ])
+    cred = client.get(f"/api/vault/credentials/{hits[0]['id']}/")
+    cred["vault_name"] = _vault_name(client, cred.get("vault"))
+    return cred
+
+
+def reveal_credential(client: ApiClient, credential_id) -> dict:
+    """Fetch a credential's PLAINTEXT secrets. Only call on explicit user request.
+
+    This hits the single endpoint that decrypts secrets; the caller must confirm
+    with the user first.
+    """
+    return client.get(f"/api/vault/credentials/{credential_id}/reveal/")
+
+
+def resolve_server(client: ApiClient, ref: str) -> dict:
+    """Resolve a vault server by id or name; returns its detail (enriched).
+
+    Adds `vault_name`; the linked credential's name is already in
+    `credential_details` (masked — no secrets).
+    """
+    items = _as_list(client.get("/api/vault/servers/"))
+    hits = _match(items, ref)
+    if not hits:
+        raise ResourceNotFound("server", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("server", ref, [
+            {"id": s.get("id"), "name": s.get("name") or "(unnamed)",
+             "hint": s.get("host") or ""}
+            for s in hits
+        ])
+    server = client.get(f"/api/vault/servers/{hits[0]['id']}/")
+    server["vault_name"] = _vault_name(client, server.get("vault"))
+    return server
+
+
+def resolve_vault(client: ApiClient, ref: str) -> dict:
+    """Resolve a vault by id or name; returns its detail (nested creds + servers)."""
+    items = _as_list(client.get("/api/vault/vaults/"))
+    hits = _match(items, ref)
+    if not hits:
+        raise ResourceNotFound("vault", ref)
+    if len(hits) > 1:
+        raise AmbiguousResource("vault", ref, [
+            {"id": v.get("id"), "name": v.get("name") or "(unnamed)",
+             "hint": f"modified {_relative_time(v.get('modified_at'))}"}
+            for v in hits
+        ])
+    return client.get(f"/api/vault/vaults/{hits[0]['id']}/")

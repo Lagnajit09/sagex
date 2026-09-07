@@ -166,6 +166,104 @@ def show_script_cmd(
     render.script(meta, content)
 
 
+@show_app.command("run")
+def show_run_cmd(
+    ref: str = typer.Argument(..., help="Run id (or an id prefix)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+    logs: bool = typer.Option(False, "--logs", help="Also download and print each node's stdout/stderr."),
+) -> None:
+    """Show a run's status and per-node results (and optionally its logs)."""
+    client = _client_or_exit()
+    run = _resolve_or_exit(resources.resolve_run, client, ref, "run")
+    if json_out:
+        render.print_json(run)
+        return
+
+    nodes: list = []
+    try:
+        nodes = resources.get_run_nodes(client, run["id"])
+    except ApiError as exc:
+        typer.echo(f"(couldn't load node results: {exc.message})")
+
+    render.run(run, nodes)
+
+    # Logs live in GCS behind signed URLs and are swept after ~90 days; the server
+    # tells us via `logs_expired` on any node (it's keyed off the run's age).
+    if any(n.get("logs_expired") for n in nodes):
+        render.note("Logs are not available for this run — we keep logs for 90 days.")
+    elif logs:
+        entries = []
+        for n in nodes:
+            label = n.get("node_label") or n.get("node_id") or "node"
+            for stream in ("stdout", "stderr"):
+                url = n.get(f"{stream}_signed_url")
+                if url:
+                    try:
+                        text = resources.fetch_log_text(url)
+                    except ApiError as exc:
+                        text = f"({exc.message})"
+                    entries.append((label, stream, text))
+        render.run_logs(entries)
+    elif any(n.get("stdout_signed_url") or n.get("stderr_signed_url") for n in nodes):
+        render.note("Logs available — pass --logs to print them.")
+
+
+@show_app.command("trigger")
+def show_trigger_cmd(
+    ref: str = typer.Argument(..., help="Trigger id or workflow name."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+) -> None:
+    """Show a trigger's detail (schedule or HTTP). Never prints the full secret."""
+    client = _client_or_exit()
+    kind, detail = _resolve_or_exit(resources.resolve_trigger, client, ref, "trigger")
+    render.print_json(detail) if json_out else render.trigger(kind, detail)
+
+
+@show_app.command("key")
+def show_key_cmd(
+    ref: str = typer.Argument(..., help="Credential (key) id or name."),
+    reveal: bool = typer.Option(False, "--reveal", help="Fetch and display the secret values (asks first)."),
+) -> None:
+    """Show a vault credential. Secrets stay hidden unless you pass --reveal."""
+    client = _client_or_exit()
+    cred = _resolve_or_exit(resources.resolve_credential, client, ref, "key")
+
+    secrets = None
+    if reveal:
+        name = cred.get("name") or cred.get("id")
+        if not typer.confirm(f"Reveal plaintext secrets for '{name}'? They will be printed here."):
+            typer.echo("Aborted — secrets not fetched.")
+            raise typer.Exit(code=1)
+        try:
+            secrets = resources.reveal_credential(client, cred["id"])
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}")
+            raise typer.Exit(code=1)
+    render.credential(cred, secrets)
+
+
+@show_app.command("server")
+def show_server_cmd(
+    ref: str = typer.Argument(..., help="Server id or name."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+) -> None:
+    """Show a vault server (host, connection method, linked credential, vault)."""
+    client = _client_or_exit()
+    server = _resolve_or_exit(resources.resolve_server, client, ref, "server")
+    render.print_json(server) if json_out else render.server(server)
+
+
+@show_app.command("vault")
+def show_vault_cmd(
+    ref: str = typer.Argument(..., help="Vault id or name."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+) -> None:
+    """Show a vault and the credentials and servers it contains."""
+    client = _client_or_exit()
+    vault = _resolve_or_exit(resources.resolve_vault, client, ref, "vault")
+    render.print_json(vault) if json_out else render.vault(vault)
+
+
 def _check(raise_on_fail: bool) -> None:
     """Verify the stored key against the backend and print the result."""
     key = store.get_key()
