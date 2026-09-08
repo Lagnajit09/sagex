@@ -41,6 +41,9 @@ app.add_typer(workspace_app, name="workspace")
 show_app = typer.Typer(help="Show a single resource's details in the terminal.")
 app.add_typer(show_app, name="show")
 
+list_app = typer.Typer(help="List resources in a compact table.")
+app.add_typer(list_app, name="list")
+
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
 
@@ -262,6 +265,86 @@ def show_vault_cmd(
     client = _client_or_exit()
     vault = _resolve_or_exit(resources.resolve_vault, client, ref, "vault")
     render.print_json(vault) if json_out else render.vault(vault)
+
+
+def _list_or_exit(fn, client, **kwargs):
+    """Call a list_*_full function and return items, or exit on ApiError."""
+    try:
+        return fn(client, **kwargs)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+
+@list_app.command("workflow")
+def list_workflow_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List all workflows."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_workflows_full, client)
+    render.print_json(render.slim_items(items, "workflow")) if json_out else render.list_workflows(items)
+
+
+@list_app.command("script")
+def list_script_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List all scripts."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_scripts_full, client)
+    render.print_json(render.slim_items(items, "script")) if json_out else render.list_scripts(items)
+
+
+@list_app.command("run")
+def list_run_cmd(
+    limit: int = typer.Option(20, "--limit", help="Max runs to show (newest first)."),
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List recent runs, newest first."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_runs_full, client, limit=limit)
+    render.print_json(render.slim_items(items, "run")) if json_out else render.list_runs(items)
+
+
+@list_app.command("trigger")
+def list_trigger_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List all configured triggers."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_triggers_full, client)
+    render.print_json(render.slim_items(items, "trigger")) if json_out else render.list_triggers(items)
+
+
+@list_app.command("key")
+def list_key_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List all vault credentials (no secrets shown)."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_credentials_full, client)
+    render.print_json(render.slim_items(items, "credential")) if json_out else render.list_credentials(items)
+
+
+@list_app.command("server")
+def list_server_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List all vault servers."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_servers_full, client)
+    render.print_json(render.slim_items(items, "server")) if json_out else render.list_servers(items)
+
+
+@list_app.command("vault")
+def list_vault_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List all vaults."""
+    client = _client_or_exit()
+    items = _list_or_exit(resources.list_vaults_full, client)
+    render.print_json(render.slim_vaults(items)) if json_out else render.list_vaults(items)
 
 
 def _check(raise_on_fail: bool) -> None:

@@ -4,12 +4,10 @@ All backend-shape knowledge (envelope quirks, field names, pagination) lives her
 so the UI code just asks for "the list of workflow names" and gets a clean list.
 """
 
-from datetime import datetime, timezone
-
 import httpx
 
 from sagex.api.client import ApiClient, ApiError
-from sagex.formatting import truncate_name
+from sagex.formatting import relative_time, truncate_name
 
 
 def _as_list(data) -> list:
@@ -17,26 +15,6 @@ def _as_list(data) -> list:
     if isinstance(data, dict):
         return data.get("results", [])
     return data or []
-
-
-def _relative_time(iso: str | None) -> str:
-    """Turn an ISO timestamp into a short 'just now' / '2m ago' / '3h ago' / '5d ago'."""
-    if not iso:
-        return ""
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        return ""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    secs = int((datetime.now(timezone.utc) - dt).total_seconds())
-    if secs < 60:
-        return "just now"
-    if secs < 3600:
-        return f"{secs // 60}m ago"
-    if secs < 86400:
-        return f"{secs // 3600}h ago"
-    return f"{secs // 86400}d ago"
 
 
 def list_workflows(client: ApiClient) -> list[str]:
@@ -91,7 +69,7 @@ def list_recent_runs(client: ApiClient, limit: int = 5) -> list[tuple[str, str, 
         (
             r.get("status") or "unknown",
             r.get("workflow_name") or "(workflow)",
-            _relative_time(r.get("created_at")),
+            relative_time(r.get("created_at")),
         )
         for r in runs[:limit]
     ]
@@ -149,7 +127,7 @@ def resolve_workflow(client: ApiClient, ref: str) -> dict:
     if len(hits) > 1:
         raise AmbiguousResource("workflow", ref, [
             {"id": w.get("id"), "name": w.get("name") or "(unnamed)",
-             "hint": f"modified {_relative_time(w.get('modified_at'))}"}
+             "hint": f"modified {relative_time(w.get('modified_at'))}"}
             for w in hits
         ])
     return client.get(f"/api/workflows/{hits[0]['id']}/")
@@ -168,7 +146,7 @@ def resolve_script(client: ApiClient, ref: str) -> dict:
     if len(hits) > 1:
         raise AmbiguousResource("script", ref, [
             {"id": s.get("id"), "name": s.get("name") or "(unnamed)",
-             "hint": f"v{s.get('version')} · updated {_relative_time(s.get('updated_at'))}"}
+             "hint": f"v{s.get('version')} · updated {relative_time(s.get('updated_at'))}"}
             for s in hits
         ])
     return client.get(f"/api/scripts/{hits[0]['id']}/")
@@ -200,7 +178,7 @@ def resolve_run(client: ApiClient, ref: str) -> dict:
     if len(hits) > 1:
         raise AmbiguousResource("run", ref, [
             {"id": r.get("id"), "name": r.get("workflow_name") or "(workflow)",
-             "hint": f"{r.get('status')} · {_relative_time(r.get('created_at'))}"}
+             "hint": f"{r.get('status')} · {relative_time(r.get('created_at'))}"}
             for r in hits
         ])
     return client.get(f"/api/execution-engine/workflows/runs/{hits[0]['id']}/")
@@ -333,7 +311,62 @@ def resolve_vault(client: ApiClient, ref: str) -> dict:
     if len(hits) > 1:
         raise AmbiguousResource("vault", ref, [
             {"id": v.get("id"), "name": v.get("name") or "(unnamed)",
-             "hint": f"modified {_relative_time(v.get('modified_at'))}"}
+             "hint": f"modified {relative_time(v.get('modified_at'))}"}
             for v in hits
         ])
     return client.get(f"/api/vault/vaults/{hits[0]['id']}/")
+
+
+# ---------------------------------------------------------------------------
+# Full-list helpers for the `sagex list` commands.
+# ---------------------------------------------------------------------------
+
+
+def list_workflows_full(client: ApiClient) -> list[dict]:
+    """All workflows — id, name, modified_at."""
+    return _as_list(client.get("/api/workflows/"))
+
+
+def list_scripts_full(client: ApiClient) -> list[dict]:
+    """All scripts — id, name, content_type, version."""
+    return _as_list(client.get("/api/scripts/"))
+
+
+def list_runs_full(client: ApiClient, limit: int = 20) -> list[dict]:
+    """Recent runs sorted newest-first (capped at `limit`)."""
+    runs = _as_list(client.get("/api/execution-engine/workflows/runs/"))
+    runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return runs[:limit]
+
+
+def list_triggers_full(client: ApiClient) -> list[dict]:
+    """All triggers as a flat list; each dict has a 'kind' key ('http' or 'schedule')."""
+    data = client.get("/api/triggers/") or {}
+    out: list[dict] = []
+    for t in data.get("schedule_triggers", []):
+        out.append({**t, "kind": "schedule"})
+    for t in data.get("http_triggers", []):
+        out.append({**t, "kind": "http"})
+    return out
+
+
+def list_credentials_full(client: ApiClient) -> list[dict]:
+    """All credentials enriched with vault_name (2 API calls: creds + vaults list)."""
+    creds = _as_list(client.get("/api/vault/credentials/"))
+    vault_names = {
+        str(v.get("id")): v.get("name")
+        for v in _as_list(client.get("/api/vault/vaults/"))
+    }
+    for c in creds:
+        c["vault_name"] = vault_names.get(str(c.get("vault") or ""))
+    return creds
+
+
+def list_servers_full(client: ApiClient) -> list[dict]:
+    """All servers — name, host, port, connection_method."""
+    return _as_list(client.get("/api/vault/servers/"))
+
+
+def list_vaults_full(client: ApiClient) -> list[dict]:
+    """All vaults (nested credentials + servers included by the serializer)."""
+    return _as_list(client.get("/api/vault/vaults/"))

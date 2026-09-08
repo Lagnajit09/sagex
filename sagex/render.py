@@ -13,7 +13,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from sagex.formatting import STATUS_ICON
+from sagex.formatting import STATUS_ICON, relative_time
 
 console = Console()
 
@@ -319,3 +319,182 @@ def vault(v: dict) -> None:
             table.add_row(str(s.get("name") or ""), f"{host}:{port}" if port else str(host),
                           str(s.get("connection_method") or ""))
         console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# JSON slimming — strip internal/noisy fields before printing --json output.
+# ---------------------------------------------------------------------------
+
+_SLIM: dict[str, list[str]] = {
+    "workflow":   ["id", "name", "description", "modified_at", "created_at"],
+    "script":     ["id", "name", "content_type", "version", "file_size", "updated_at"],
+    "run":        ["id", "workflow_name", "status", "created_at", "started_at", "finished_at", "error_message"],
+    "trigger":    ["workflow_name", "kind", "is_active", "node_id", "workflow_id",
+                   "cron_expression", "timezone", "trigger_url", "secret_last4"],
+    "credential": ["id", "name", "credential_type", "vault_name", "created_at", "modified_at"],
+    "server":     ["id", "name", "host", "port", "connection_method", "vault_name", "created_at", "modified_at"],
+}
+
+
+def slim_items(items: list[dict], kind: str) -> list[dict]:
+    """Return a copy of `items` with only the display-relevant fields for `kind`."""
+    fields = _SLIM[kind]
+    return [{k: it[k] for k in fields if k in it} for it in items]
+
+
+def slim_vaults(items: list[dict]) -> list[dict]:
+    """Vault-specific slim: top-level fields + compact nested cred/server lists."""
+    out = []
+    for v in items:
+        d = {k: v[k] for k in ["id", "name", "description", "created_at", "modified_at"] if k in v}
+        d["credentials"] = [
+            {"id": c.get("id"), "name": c.get("name"), "type": c.get("credential_type")}
+            for c in (v.get("credentials") or [])
+        ]
+        d["servers"] = [
+            {"id": s.get("id"), "name": s.get("name"), "host": s.get("host"), "method": s.get("connection_method")}
+            for s in (v.get("servers") or [])
+        ]
+        out.append(d)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# List renderers — one per resource type, for the `sagex list` commands.
+# ---------------------------------------------------------------------------
+
+
+def list_workflows(items: list[dict]) -> None:
+    if not items:
+        note("No workflows found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("name")
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("modified", style="bright_black")
+    for w in items:
+        table.add_row(
+            w.get("name") or "(unnamed)",
+            str(w.get("id") or ""),
+            relative_time(w.get("modified_at")),
+        )
+    console.print(table)
+
+
+def list_scripts(items: list[dict]) -> None:
+    if not items:
+        note("No scripts found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("name")
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("type", style="bright_black")
+    table.add_column("ver", style="bright_black")
+    for s in items:
+        ver = s.get("version")
+        table.add_row(
+            s.get("name") or "(unnamed)",
+            str(s.get("id") or ""),
+            s.get("content_type") or "—",
+            f"v{ver}" if ver is not None else "—",
+        )
+    console.print(table)
+
+
+def list_runs(items: list[dict]) -> None:
+    if not items:
+        note("No runs found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("workflow")
+    table.add_column("status")
+    table.add_column("created", style="bright_black")
+    for r in items:
+        status = r.get("status") or "unknown"
+        icon, color = STATUS_ICON.get(status, ("•", "white"))
+        table.add_row(
+            str(r.get("id") or "")[:8],
+            r.get("workflow_name") or "—",
+            Text(f"{icon} {status}", style=color),
+            relative_time(r.get("created_at")),
+        )
+    console.print(table)
+
+
+def list_triggers(items: list[dict]) -> None:
+    if not items:
+        note("No triggers found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("workflow")
+    table.add_column("kind")
+    table.add_column("active")
+    for t in items:
+        is_active = t.get("is_active")
+        active_text = Text("● yes", style="green") if is_active else Text("○ no", style="bright_black")
+        table.add_row(
+            t.get("workflow_name") or "—",
+            t.get("kind") or "—",
+            active_text,
+        )
+    console.print(table)
+
+
+def list_credentials(items: list[dict]) -> None:
+    if not items:
+        note("No credentials found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("name")
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("type", style="bright_black")
+    table.add_column("vault", style="bright_black")
+    for c in items:
+        table.add_row(
+            c.get("name") or "(unnamed)",
+            str(c.get("id") or ""),
+            c.get("credential_type") or "—",
+            c.get("vault_name") or str(c.get("vault") or "—"),
+        )
+    console.print(table)
+
+
+def list_servers(items: list[dict]) -> None:
+    if not items:
+        note("No servers found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("name")
+    table.add_column("host")
+    table.add_column("method", style="bright_black")
+    for s in items:
+        host = s.get("host") or "—"
+        port = s.get("port")
+        table.add_row(
+            s.get("name") or "(unnamed)",
+            f"{host}:{port}" if port else host,
+            s.get("connection_method") or "—",
+        )
+    console.print(table)
+
+
+def list_vaults(items: list[dict]) -> None:
+    if not items:
+        note("No vaults found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("name")
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_column("#creds", justify="right", style="bright_black")
+    table.add_column("#servers", justify="right", style="bright_black")
+    for v in items:
+        creds = v.get("credentials") or []
+        svrs = v.get("servers") or []
+        table.add_row(
+            v.get("name") or "(unnamed)",
+            str(v.get("id") or ""),
+            str(len(creds)) if isinstance(creds, list) else "—",
+            str(len(svrs)) if isinstance(svrs, list) else "—",
+        )
+    console.print(table)

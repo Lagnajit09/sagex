@@ -4,7 +4,29 @@ Kept separate from data.py (what the data IS) and app.py (how the app behaves),
 so all "how a status looks" decisions live in one place.
 """
 
+from datetime import datetime, timezone
+
 from rich.text import Text
+
+
+def relative_time(iso: str | None) -> str:
+    """Turn an ISO timestamp into a short human label: 'just now', '2m ago', '3h ago', '5d ago'."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
 
 
 # --- Run status -> (icon, color). One place to change how a status looks. ---
