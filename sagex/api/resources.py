@@ -133,6 +133,11 @@ def resolve_workflow(client: ApiClient, ref: str) -> dict:
     return client.get(f"/api/workflows/{hits[0]['id']}/")
 
 
+def get_workflow_detail(client: ApiClient, workflow_id) -> dict:
+    """Fetch a workflow's full detail (nodes + edges) by id, skipping name resolution."""
+    return client.get(f"/api/workflows/{workflow_id}/")
+
+
 def resolve_script(client: ApiClient, ref: str) -> dict:
     """Resolve a script name-or-id and return its metadata record (no code body).
 
@@ -332,11 +337,11 @@ def list_scripts_full(client: ApiClient) -> list[dict]:
     return _as_list(client.get("/api/scripts/"))
 
 
-def list_runs_full(client: ApiClient, limit: int = 20) -> list[dict]:
-    """Recent runs sorted newest-first (capped at `limit`)."""
+def list_runs_full(client: ApiClient, limit: int | None = 20) -> list[dict]:
+    """Recent runs sorted newest-first. `limit=None` returns the full history."""
     runs = _as_list(client.get("/api/execution-engine/workflows/runs/"))
     runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return runs[:limit]
+    return runs if limit is None else runs[:limit]
 
 
 def list_triggers_full(client: ApiClient) -> list[dict]:

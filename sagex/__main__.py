@@ -10,6 +10,7 @@ otherwise the matching `auth` command runs as a plain CLI action.
 """
 
 import sys
+from pathlib import Path
 
 import typer
 
@@ -22,7 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from sagex import __version__, config, render
+from sagex import __version__, config, copier, render
 from sagex.api import ApiError, build_client, resources
 from sagex.api import store
 from sagex.app import SagexApp
@@ -43,6 +44,9 @@ app.add_typer(show_app, name="show")
 
 list_app = typer.Typer(help="List resources in a compact table.")
 app.add_typer(list_app, name="list")
+
+copy_app = typer.Typer(help="Copy resources to your local workspace.")
+app.add_typer(copy_app, name="copy")
 
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
@@ -345,6 +349,111 @@ def list_vault_cmd(
     client = _client_or_exit()
     items = _list_or_exit(resources.list_vaults_full, client)
     render.print_json(render.slim_vaults(items)) if json_out else render.list_vaults(items)
+
+
+def _wrote(paths) -> None:
+    """Report the files a copy command wrote (one dim line each)."""
+    for p in paths:
+        render.note(f"  wrote {p}")
+
+
+@copy_app.command("workflow")
+def copy_workflow_cmd(
+    ref: str = typer.Argument(None, help="Workflow name or id (omit with --all)."),
+    all_: bool = typer.Option(False, "--all", help="Copy every workflow."),
+) -> None:
+    """Copy a workflow (or all) as JSON to <workspace>/workflows/."""
+    client = _client_or_exit()
+    workspace = Path(config.workspace_dir())
+    if all_:
+        try:
+            paths = copier.copy_all_workflows(client, workspace)
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}"); raise typer.Exit(code=1)
+        _wrote(paths)
+        render.note(f"Copied {len(paths)} workflow(s) to {workspace / 'workflows'}")
+        return
+    if not ref:
+        typer.echo("Give a workflow name/id, or pass --all."); raise typer.Exit(code=1)
+    wf = _resolve_or_exit(resources.resolve_workflow, client, ref, "workflow")
+    _wrote([copier.copy_workflow(workspace, wf)])
+
+
+@copy_app.command("script")
+def copy_script_cmd(
+    ref: str = typer.Argument(None, help="Script name or id (omit with --all)."),
+    all_: bool = typer.Option(False, "--all", help="Copy every script."),
+) -> None:
+    """Copy a script's code (or all) to <workspace>/scripts/."""
+    client = _client_or_exit()
+    workspace = Path(config.workspace_dir())
+    if all_:
+        try:
+            paths = copier.copy_all_scripts(client, workspace)
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}"); raise typer.Exit(code=1)
+        _wrote(paths)
+        render.note(f"Copied {len(paths)} script(s) to {workspace / 'scripts'}")
+        return
+    if not ref:
+        typer.echo("Give a script name/id, or pass --all."); raise typer.Exit(code=1)
+    meta = _resolve_or_exit(resources.resolve_script, client, ref, "script")
+    try:
+        content = resources.get_script_content(client, meta["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}"); raise typer.Exit(code=1)
+    _wrote([copier.copy_script(workspace, meta, content)])
+
+
+@copy_app.command("run")
+def copy_run_cmd(
+    ref: str = typer.Argument(None, help="Run id/prefix (omit when using --since)."),
+    since: str = typer.Option(
+        None, "--since",
+        help="Copy all runs in a window instead of one: 1day | 7days | 1month | all.",
+    ),
+) -> None:
+    """Copy a run's metadata + logs to <workspace>/runs/ (one folder per run)."""
+    client = _client_or_exit()
+    workspace = Path(config.workspace_dir())
+
+    if since is not None:
+        if since != "all" and since not in copier.WINDOWS:
+            typer.echo("--since must be one of: 1day, 7days, 1month, all."); raise typer.Exit(code=1)
+        try:
+            runs = copier.runs_in_window(resources.list_runs_full(client, limit=None), since)
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}"); raise typer.Exit(code=1)
+        if not runs:
+            render.note(f"No runs in the last {since}."); return
+        render.note(f"Copying {len(runs)} run(s)…")
+        total = 0
+        for r in runs:
+            try:
+                paths = copier.copy_run(client, workspace, r)
+            except ApiError as exc:
+                typer.echo(f"✗ {r.get('id')}: {exc.message}"); continue
+            _wrote(paths); total += len(paths)
+        render.note(f"Copied {len(runs)} run(s) to {workspace / 'runs'}")
+        return
+
+    if not ref:
+        typer.echo("Give a run id/prefix, or pass --since <window>."); raise typer.Exit(code=1)
+    run = _resolve_or_exit(resources.resolve_run, client, ref, "run")
+    try:
+        _wrote(copier.copy_run(client, workspace, run))
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}"); raise typer.Exit(code=1)
+
+
+@copy_app.command("key")
+def copy_key_cmd(
+    ref: str = typer.Argument(None, help="(unused)"),
+) -> None:
+    """Keys/credentials cannot be copied — secrets never touch local disk."""
+    typer.echo("Keys can't be copied — secrets are never written to disk.")
+    typer.echo("To view a secret value interactively, use:  sagex show key <ref> --reveal")
+    raise typer.Exit(code=1)
 
 
 def _check(raise_on_fail: bool) -> None:

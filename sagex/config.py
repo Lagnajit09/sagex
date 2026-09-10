@@ -49,3 +49,8 @@ def resolve_workspace(path: str) -> str:
     if not os.path.isdir(resolved):
         raise ValueError(f"Not a folder: {resolved}")
     return resolved
+
+
+def workspace_dir() -> str:
+    """The effective workspace folder: the saved one, else the current directory."""
+    return load().get("workspace") or os.getcwd()
