@@ -7,6 +7,7 @@ same data as widgets later; only this file is CLI-specific.
 
 from datetime import datetime
 
+from rich.cells import cell_len
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -78,6 +79,152 @@ def workflow(wf: dict) -> None:
             label = data.get("label") or n.get("label") or ""
             table.add_row(str(n.get("id") or ""), str(n.get("type") or ""), str(label))
         console.print(table)
+
+
+# --- workflow graph (text visualization) -----------------------------------
+
+# icon + colour + short kind label, keyed off node type (and action's data.type).
+def _node_style(node: dict) -> tuple[str, str, str]:
+    ntype = node.get("type")
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    dtype = data.get("type")
+    if ntype == "trigger":
+        return "▸", "cyan", f"trigger:{dtype or 'manual'}"
+    if ntype == "decision":
+        return "◆", "yellow", "decision"
+    if ntype == "action":
+        if dtype == "email":
+            return "■", "blue", "action:email"
+        if dtype == "script":
+            return "●", "green", "action:script"
+        return "•", "white", f"action:{dtype or '?'}"
+    return "•", "white", str(ntype or "?")
+
+
+def _node_box(node: dict | None, node_id) -> tuple[list[Text], int]:
+    """Draw a node as a rounded rectangle. Returns (lines, box_width_in_cells).
+
+    The icon glyphs (⚡⚙✉◆) are counted as one cell each — Rich's cell_len calls
+    some of them width-2 (emoji), but terminals render them width-1, so we measure
+    the head line as icon(1) + space + label to keep the right border aligned.
+    """
+    if node is None:
+        icon, color, kind = "•", "red", "missing node"
+        label = str(node_id)
+    else:
+        icon, color, kind = _node_style(node)
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        label = str(data.get("label") or node.get("label") or node_id)
+    if len(label) > 42:
+        label = label[:41] + "…"
+
+    meta = f"{kind}  {node_id}" if str(node_id) != label else kind
+    head_w = 2 + cell_len(label)                 # icon(1) + space(1) + label
+    inner = max(head_w, cell_len(meta))
+
+    def _row(prefix_runs, width, close=True):
+        row = Text("│ ", style=color)
+        for text, style in prefix_runs:
+            row.append(text, style=style)
+        row.append(" " * (inner - width) + " ", style=color)
+        row.append("│", style=color)
+        return row
+
+    return (
+        [
+            Text("╭" + "─" * (inner + 2) + "╮", style=color),
+            _row([(f"{icon} ", color), (label, color)], head_w),
+            _row([(meta, "bright_black")], cell_len(meta)),
+            Text("╰" + "─" * (inner + 2) + "╯", style=color),
+        ],
+        inner + 4,
+    )
+
+
+def _prefix(lines: list[Text], first: str, rest: str, style: str = "bright_black") -> list[Text]:
+    """Left-attach a connector to a block: `first` on line 0, `rest` on the others."""
+    out = []
+    for i, line in enumerate(lines):
+        row = Text(first if i == 0 else rest, style=style)
+        row.append(line)
+        out.append(row)
+    return out
+
+
+def workflow_graph(wf: dict) -> None:
+    """Render a workflow as boxed nodes joined by flow edges.
+
+    Linear steps stack vertically under a centered spine (│▼); a decision fans out
+    to labelled elbow connectors (├─ true ▶ / └─ false ▶). A node reached by two
+    paths is drawn once and shown later as a back-reference (↑), keeping it finite.
+    """
+    nodes = wf.get("nodes") or []
+    edges = wf.get("edges") or []
+    if not nodes:
+        note("(workflow has no nodes)")
+        return
+
+    by_id = {n.get("id"): n for n in nodes}
+    children: dict = {}
+    indeg = {n.get("id"): 0 for n in nodes}
+    for e in edges:
+        children.setdefault(e.get("source"), []).append(e)
+        if e.get("target") in indeg:
+            indeg[e.get("target")] += 1
+
+    roots = [n.get("id") for n in nodes if n.get("type") == "trigger"]
+    if not roots:
+        roots = [nid for nid, d in indeg.items() if d == 0] or [nodes[0].get("id")]
+
+    visited: set = set()
+
+    def block(node_id) -> list[Text]:
+        """The subtree rooted at node_id, box top-left anchored at column 0."""
+        lines, width = _node_box(by_id.get(node_id), node_id)
+        visited.add(node_id)
+        kids = children.get(node_id, [])
+
+        if len(kids) == 1 and (by_id.get(node_id) or {}).get("type") != "decision":
+            spine = width // 2
+            lines.append(Text(" " * spine + "│", style="bright_black"))
+            lines.append(Text(" " * spine + "▼", style="bright_black"))
+            lines += _child(kids[0])
+            return lines
+
+        for i, e in enumerate(kids):
+            last = i == len(kids) - 1
+            handle = e.get("sourceHandle")
+            tag = f"{handle} " if handle else ""
+            first = ("└─ " if last else "├─ ") + f"{tag}▶ "
+            rest = (" " if last else "│") + " " * (len(first) - 1)
+            lines += _prefix(_child(e), first, rest)
+        return lines
+
+    def _child(edge) -> list[Text]:
+        target = edge.get("target")
+        if target in visited:
+            label = (by_id.get(target) or {}).get("data", {})
+            name = label.get("label") if isinstance(label, dict) else None
+            return [Text(f"↑ {name or target} (shown above)", style="bright_black")]
+        return block(target)
+
+    title = Text(wf.get("name") or "(workflow)", style="bold")
+    title.append(f"   {len(nodes)} nodes · {len(edges)} edges", style="bright_black")
+    console.print(title)
+
+    for r in roots:
+        for line in block(r):
+            console.print(line)
+
+    leftover = [n.get("id") for n in nodes if n.get("id") not in visited]
+    if leftover:
+        console.print(Text("(not reachable from a trigger)", style="bright_black"))
+        for nid in leftover:
+            if nid not in visited:
+                for line in block(nid):
+                    console.print(line)
+
+    console.print(Text("▸ trigger   ● script   ■ email   ◆ decision", style="bright_black"))
 
 
 # --- script ----------------------------------------------------------------

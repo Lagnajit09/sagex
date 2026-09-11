@@ -43,6 +43,9 @@ app.add_typer(workspace_app, name="workspace")
 show_app = typer.Typer(help="Show a single resource's details in the terminal.")
 app.add_typer(show_app, name="show")
 
+render_app = typer.Typer(help="Render a workflow as a flow tree in the terminal.")
+app.add_typer(render_app, name="render")
+
 list_app = typer.Typer(help="List resources in a compact table.")
 app.add_typer(list_app, name="list")
 
@@ -426,10 +429,39 @@ def show_workflow_cmd(
     ref: str = typer.Argument(..., help="Workflow name or id."),
     json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
 ) -> None:
-    """Show a workflow's details (including its nodes and edges)."""
+    """Show a workflow's details (including its nodes and edges). Use `sagex render` for the flow tree."""
     client = _client_or_exit()
     wf = _resolve_or_exit(resources.resolve_workflow, client, ref, "workflow")
     render.print_json(wf) if json_out else render.workflow(wf)
+
+
+@render_app.command("workflow")
+def render_workflow_cmd(
+    ref: str = typer.Argument(None, help="Workflow name or id (omit when using --file)."),
+    file: str = typer.Option(None, "--file", "-f", help="Render a local file: a path, or a name under <workspace>/workflows/."),
+) -> None:
+    """Render a workflow's flow as boxed nodes + edges. Works on a local file too (--file)."""
+    if file:
+        workspace = Path(config.workspace_dir())
+        try:
+            path = pusher.resolve_workflow_file(workspace, file)
+        except pusher.WorkflowFileNotFound as exc:
+            typer.echo(f"No workflow file for '{exc.ref}'. Looked at:")
+            for p in exc.looked:
+                typer.echo(f"  {p}")
+            raise typer.Exit(code=1)
+        try:
+            wf = pusher.load_doc(path)
+        except ValueError as exc:
+            typer.echo(f"✗ {exc}")
+            raise typer.Exit(code=1)
+    else:
+        if not ref:
+            typer.echo("Give a workflow name/id, or pass --file <path-or-name>.")
+            raise typer.Exit(code=1)
+        client = _client_or_exit()
+        wf = _resolve_or_exit(resources.resolve_workflow, client, ref, "workflow")
+    render.workflow_graph(wf)
 
 
 @show_app.command("script")
