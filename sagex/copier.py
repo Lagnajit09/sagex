@@ -30,7 +30,7 @@ WINDOWS = {"1day": 1, "7days": 7, "1month": 30}
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _safe(name: str | None, fallback: str) -> str:
+def safe_name(name: str | None, fallback: str) -> str:
     """Filesystem-safe slug: collapse anything outside [A-Za-z0-9._-] to '_'."""
     cleaned = _UNSAFE.sub("_", (name or "").strip()).strip("_")
     return cleaned or fallback
@@ -49,7 +49,7 @@ def copy_workflow(workspace: Path, wf: dict) -> Path:
     """Write a workflow's detail as JSON under <ws>/workflows/<name>.json."""
     doc = {k: wf.get(k) for k in
            ("id", "name", "description", "nodes", "edges", "created_at", "modified_at")}
-    name = _safe(wf.get("name"), f"workflow_{wf.get('id')}")
+    name = safe_name(wf.get("name"), f"workflow_{wf.get('id')}")
     return _write(workspace / "workflows" / f"{name}.json", json.dumps(doc, indent=2))
 
 
@@ -65,7 +65,7 @@ def copy_all_workflows(client, workspace: Path) -> list[Path]:
 
 def copy_script(workspace: Path, meta: dict, content: dict) -> Path:
     """Write a script's code under <ws>/scripts/<name.ext> (name carries the ext)."""
-    filename = _safe(content.get("name") or meta.get("name"), f"script_{meta.get('id')}")
+    filename = safe_name(content.get("name") or meta.get("name"), f"script_{meta.get('id')}")
     return _write(workspace / "scripts" / filename, content.get("content") or "")
 
 
@@ -125,7 +125,7 @@ def _aggregate_logs(run: dict, nodes: list[dict]) -> str:
 def copy_run(client, workspace: Path, run: dict) -> list[Path]:
     """Write <ws>/runs/<workflow>__<id8>/{run.json, logs.log}. Returns paths written."""
     rid = str(run.get("id") or "")
-    folder = workspace / "runs" / f"{_safe(run.get('workflow_name'), 'run')}__{rid[:8]}"
+    folder = workspace / "runs" / f"{safe_name(run.get('workflow_name'), 'run')}__{rid[:8]}"
 
     nodes = resources.get_run_nodes(client, rid)
     written = [_write(folder / "run.json", json.dumps(_slim_run(run, nodes), indent=2))]

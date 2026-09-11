@@ -34,6 +34,14 @@ class ApiClient:
         """GET `path` (e.g. '/api/workflows/') and return the envelope's `data`."""
         return self._request("GET", path, params=params)
 
+    def post(self, path: str, json=None):
+        """POST `json` to `path` (create) and return the envelope's `data`."""
+        return self._request("POST", path, json=json)
+
+    def put(self, path: str, json=None):
+        """PUT `json` to `path` (full update) and return the envelope's `data`."""
+        return self._request("PUT", path, json=json)
+
     # --- internals -----------------------------------------------------------
 
     def _headers(self) -> dict:

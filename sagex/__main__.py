@@ -23,7 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from sagex import __version__, config, copier, render
+from sagex import __version__, config, copier, pusher, render
 from sagex.api import ApiError, build_client, resources
 from sagex.api import store
 from sagex.app import SagexApp
@@ -47,6 +47,9 @@ app.add_typer(list_app, name="list")
 
 copy_app = typer.Typer(help="Copy resources to your local workspace.")
 app.add_typer(copy_app, name="copy")
+
+push_app = typer.Typer(help="Push local resource files to the server (create/update).")
+app.add_typer(push_app, name="push")
 
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
@@ -454,6 +457,83 @@ def copy_key_cmd(
     typer.echo("Keys can't be copied — secrets are never written to disk.")
     typer.echo("To view a secret value interactively, use:  sagex show key <ref> --reveal")
     raise typer.Exit(code=1)
+
+
+@push_app.command("workflow")
+def push_workflow_cmd(
+    ref: str = typer.Argument(..., help="Workflow file path, or a name under <workspace>/workflows/."),
+    new: bool = typer.Option(False, "--new", help="Force-create a new workflow even if the file has an id."),
+    name: str = typer.Option(None, "--name", help="Override the workflow name (useful with --new)."),
+    yes: bool = typer.Option(False, "--yes", help="Skip the update confirmation prompt."),
+) -> None:
+    """Push a workflow file to the server — creates if new, updates if it carries an id."""
+    client = _client_or_exit()
+    workspace = Path(config.workspace_dir())
+
+    try:
+        path = pusher.resolve_workflow_file(workspace, ref)
+    except pusher.WorkflowFileNotFound as exc:
+        typer.echo(f"No workflow file for '{exc.ref}'. Looked at:")
+        for p in exc.looked:
+            typer.echo(f"  {p}")
+        raise typer.Exit(code=1)
+
+    try:
+        doc = pusher.load_doc(path)
+    except ValueError as exc:
+        typer.echo(f"✗ {exc}")
+        raise typer.Exit(code=1)
+
+    problems = pusher.validate_workflow_doc(doc)
+    if problems:
+        typer.echo(f"✗ {path} is not a valid workflow:")
+        for p in problems:
+            typer.echo(f"  - {p}")
+        raise typer.Exit(code=1)
+
+    payload = pusher.workflow_payload(doc, name)
+    wid = None if new else doc.get("id")
+    label = payload["name"]
+
+    if wid:
+        # UPDATE — fetch the server copy first (confirms it's ours + stale-write guard).
+        try:
+            server = resources.get_workflow_detail(client, wid)
+        except ApiError as exc:
+            if exc.status == 404:
+                typer.echo(f"No workflow {wid} on the server (deleted, or not yours).")
+                typer.echo("To create a fresh copy instead, re-run with --new.")
+            else:
+                typer.echo(f"✗ {exc.message}")
+            raise typer.Exit(code=1)
+
+        typer.echo(f"Updating '{label}' (id {str(wid)[:8]}…)")
+        if pusher.server_is_newer(server.get("modified_at"), doc.get("modified_at")):
+            typer.echo(f"  ⚠ server copy is newer (server {server.get('modified_at')} "
+                       f"vs local {doc.get('modified_at')}) — pushing overwrites it.")
+        if not yes and not typer.confirm("  Overwrite the server copy?"):
+            typer.echo("Aborted — nothing pushed.")
+            raise typer.Exit(code=1)
+
+        try:
+            updated = resources.update_workflow(client, wid, payload)
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}")
+            raise typer.Exit(code=1)
+        pusher.sync_meta_back(path, doc, updated)
+        typer.echo(f"✓ Updated '{updated.get('name')}' (id {updated.get('id')})")
+        return
+
+    # CREATE
+    typer.echo(f"Creating '{label}'…")
+    try:
+        created = resources.create_workflow(client, payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    pusher.sync_meta_back(path, doc, created)
+    typer.echo(f"✓ Created '{created.get('name')}' (id {created.get('id')})")
+    render.note(f"  wrote id back to {path}")
 
 
 def _check(raise_on_fail: bool) -> None:

@@ -138,6 +138,16 @@ def get_workflow_detail(client: ApiClient, workflow_id) -> dict:
     return client.get(f"/api/workflows/{workflow_id}/")
 
 
+def create_workflow(client: ApiClient, payload: dict) -> dict:
+    """POST a new workflow; returns the created record (with its new id)."""
+    return client.post("/api/workflows/", json=payload)
+
+
+def update_workflow(client: ApiClient, workflow_id, payload: dict) -> dict:
+    """PUT a full workflow update (own workflows only); returns the updated record."""
+    return client.put(f"/api/workflows/{workflow_id}/", json=payload)
+
+
 def resolve_script(client: ApiClient, ref: str) -> dict:
     """Resolve a script name-or-id and return its metadata record (no code body).
 
