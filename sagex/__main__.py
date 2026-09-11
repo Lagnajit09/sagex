@@ -9,6 +9,7 @@ Typer parses the command line: with no subcommand, the callback launches the TUI
 otherwise the matching `auth` command runs as a plain CLI action.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -51,8 +52,264 @@ app.add_typer(copy_app, name="copy")
 push_app = typer.Typer(help="Push local resource files to the server (create/update).")
 app.add_typer(push_app, name="push")
 
+new_app = typer.Typer(help="Scaffold new local resource files ready to edit and push.")
+app.add_typer(new_app, name="new")
+
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
+
+# ---------------------------------------------------------------------------
+# Workflow scaffold template — embedded in files created by `sagex new workflow`.
+# _doc is stripped by workflow_payload() so it's never sent to the server.
+# ---------------------------------------------------------------------------
+_WORKFLOW_TEMPLATE: dict = {
+    "_doc": [
+        "Workflow file created by `sagex new workflow`.",
+        "Edit it, then run: sagex push workflow <this-file>",
+        "Get a full copy-paste snippet for any node/edge with: sagex syntax <kind>",
+        "",
+        "REQUIRED TOP-LEVEL FIELDS",
+        "  name        (string)  display name shown in the web app",
+        "  description (string)  optional free text",
+        "  nodes       (list)    each node needs: id, type, position {x, y}, data",
+        "  edges       (list)    each edge needs: id, source, target",
+        "  (a new file has no 'id' -- push creates the workflow and writes its id back here)",
+        "",
+        "NODE TYPES",
+        "  'trigger'  -- entry point; every workflow needs exactly one.",
+        "               data.type: 'manual' | 'schedule' | 'http'",
+        "",
+        "  'action' + data.type 'script' -- runs a script on a server.",
+        "     data.selectedScript.scriptId    (required) id (string) from `sagex list script`",
+        "     data.selectedScript.type        script kind label, e.g. 'Shell Script'",
+        "     data.vaultDetails.vaultId       (required) id from `sagex list vault`",
+        "     data.vaultDetails.serverId      (required) id from `sagex list server`",
+        "     data.vaultDetails.credentialId  (required) id from `sagex list key`",
+        "     data.executionMode              'remote' (run on the vault's server)",
+        "     data.outputFormat               'json' | 'text'",
+        "     data.parameters[]               {id, name, type, value, sourceType, description}",
+        "                                     sourceType 'manual' = literal; 'output' = {{node-id.output.key}}",
+        "                                     type: string | number | boolean | password",
+        "     data.jsonSchema[]               {name, type} -- declares this script's output fields",
+        "",
+        "  'action' + data.type 'email' -- sends an email.",
+        "     data.smtpConfig.{host, port, vaultId, credentialId}  (required; credential = username_password)",
+        "     data.smtpConfig.secure          true to use TLS",
+        "     data.to (list) and data.subject (string)             (required)",
+        "     data.from / data.cc / data.bcc / data.body           (optional)",
+        "",
+        "  'decision' -- conditional branch; needs exactly 2 outgoing edges.",
+        "     data.conditions[]   {id, field, operator, value, fieldSource, valueSource}",
+        "                         operator e.g. '==' / '!=';  *Source: 'output' ({{...}}) or 'manual'",
+        "     data.trueLabel      list of node ids taken when conditions pass",
+        "     data.falseLabel     list of node ids taken otherwise",
+        "     Its two edges must carry sourceHandle: 'true' and 'false'.",
+        "",
+        "EDGES",
+        "  {id, source, target} connect nodes; type 'smoothstep' + style are UI hints.",
+        "  A decision node's two edges also need sourceHandle 'true' / 'false'.",
+        "",
+        "CREATE vs UPDATE",
+        "  No 'id' field  -> push creates a new workflow and writes the id back here.",
+        "  Has 'id' field -> push updates that workflow (asks for confirmation).",
+        "  Wrong/stale id -> server returns 404; re-run push with --new to force-create.",
+    ],
+    "name": "",
+    "description": "",
+    "nodes": [
+        {
+            "id": "trigger-1",
+            "type": "trigger",
+            "position": {"x": 0, "y": 200},
+            "data": {"type": "manual", "label": "Manual Trigger", "description": ""},
+            "measured": {"width": 160, "height": 160},
+        },
+        {
+            "id": "action-1",
+            "type": "action",
+            "position": {"x": 250, "y": 200},
+            "data": {
+                "type": "script",
+                "label": "Run Script",
+                "description": "",
+                "executionMode": "remote",
+                "outputFormat": "json",
+                "selectedScript": {"type": "Shell Script", "scriptId": "REPLACE_WITH_SCRIPT_ID"},
+                "vaultDetails": {
+                    "vaultId": "REPLACE_WITH_VAULT_ID",
+                    "serverId": "REPLACE_WITH_SERVER_ID",
+                    "credentialId": "REPLACE_WITH_CREDENTIAL_ID",
+                },
+                "parameters": [],
+                "jsonSchema": [],
+            },
+            "measured": {"width": 275, "height": 102},
+        },
+    ],
+    "edges": [
+        {
+            "id": "xy-edge__trigger-1-action-1",
+            "type": "smoothstep",
+            "source": "trigger-1",
+            "target": "action-1",
+            "style": {"stroke": "#9CA3AF", "strokeWidth": 2},
+        }
+    ],
+}
+
+
+# Snippets mirror the web app's export shape (see a real export for reference).
+# ids/values are placeholders; REPLACE_WITH_* markers are the ones you must fill in.
+_SYNTAX_SNIPPETS: dict[str, object] = {
+    "trigger": {
+        "id": "trigger-1",
+        "type": "trigger",
+        "position": {"x": 0, "y": 200},
+        "data": {"type": "manual", "label": "Manual Trigger", "description": ""},
+        "measured": {"width": 160, "height": 160},
+    },
+    "script": {
+        "id": "action-1",
+        "type": "action",
+        "position": {"x": 250, "y": 200},
+        "data": {
+            "type": "script",
+            "label": "Run Script",
+            "description": "",
+            "executionMode": "remote",
+            "outputFormat": "json",
+            "selectedScript": {"type": "Shell Script", "scriptId": "REPLACE_WITH_SCRIPT_ID"},
+            "vaultDetails": {
+                "vaultId": "REPLACE_WITH_VAULT_ID",
+                "serverId": "REPLACE_WITH_SERVER_ID",
+                "credentialId": "REPLACE_WITH_CREDENTIAL_ID",
+            },
+            "parameters": [
+                {
+                    "id": "param-1",
+                    "name": "SERVICE_NAME",
+                    "type": "string",
+                    "value": "nginx",
+                    "sourceType": "manual",
+                    "description": "",
+                }
+            ],
+            "jsonSchema": [
+                {"name": "service_name", "type": "string"},
+                {"name": "status", "type": "string"},
+            ],
+        },
+        "measured": {"width": 275, "height": 102},
+    },
+    "email": {
+        "id": "action-1",
+        "type": "action",
+        "position": {"x": 250, "y": 200},
+        "data": {
+            "type": "email",
+            "label": "Send Email",
+            "description": "",
+            "from": "sender@example.com",
+            "to": ["recipient@example.com"],
+            "cc": [],
+            "bcc": [],
+            "subject": "Subject here",
+            "body": "Email body here.",
+            "smtpConfig": {
+                "host": "smtp.gmail.com",
+                "port": 587,
+                "secure": False,
+                "vaultId": "REPLACE_WITH_VAULT_ID",
+                "credentialId": "REPLACE_WITH_CREDENTIAL_ID",
+            },
+        },
+        "measured": {"width": 185, "height": 102},
+    },
+    "decision": {
+        "id": "decision-1",
+        "type": "decision",
+        "position": {"x": 500, "y": 200},
+        "data": {
+            "label": "Condition Check",
+            "description": "",
+            "conditions": [
+                {
+                    "id": "cond-1",
+                    "field": "{{action-1.output.exists}}",
+                    "value": "true",
+                    "operator": "==",
+                    "fieldSource": "output",
+                    "valueSource": "manual",
+                }
+            ],
+            "trueLabel": ["action-on-true"],
+            "falseLabel": ["action-on-false"],
+        },
+        "measured": {"width": 160, "height": 160},
+    },
+    "edge": {
+        "id": "xy-edge__source-target",
+        "type": "smoothstep",
+        "source": "source-node-id",
+        "target": "target-node-id",
+        "style": {"stroke": "#9CA3AF", "strokeWidth": 2},
+    },
+    "decision-edge": [
+        {
+            "id": "decision-1-action-on-true-true",
+            "type": "smoothstep",
+            "label": "True",
+            "source": "decision-1",
+            "target": "action-on-true",
+            "sourceHandle": "true",
+            "style": {"stroke": "#10b981", "strokeWidth": 2},
+        },
+        {
+            "id": "decision-1-action-on-false-false",
+            "type": "smoothstep",
+            "label": "False",
+            "source": "decision-1",
+            "target": "action-on-false",
+            "sourceHandle": "false",
+            "style": {"stroke": "#ef4444", "strokeWidth": 2},
+        },
+    ],
+}
+
+_SYNTAX_NOTES: dict[str, list[str]] = {
+    "trigger": [
+        "Entry point — exactly one per workflow. Required: id, type, position, data.type, data.label.",
+        "data.type: 'manual' | 'schedule' | 'http' (schedule/http need their trigger settings from the web app).",
+    ],
+    "script": [
+        "Action that runs a script on a server.",
+        "Required: selectedScript.scriptId, vaultDetails.{vaultId, serverId, credentialId}.",
+        "parameters[].sourceType: 'manual' (literal value) or 'output' (value is a {{node-id.output.key}} reference).",
+        "parameters[].type: string | number | boolean | password.   outputFormat: 'json' | 'text'.",
+        "jsonSchema declares this script's outputs so later nodes can read {{this-id.output.<name>}}.",
+    ],
+    "email": [
+        "Action that sends an email.",
+        "Required: smtpConfig.{host, port, vaultId, credentialId}, subject, to[].",
+        "credentialId must be a username_password credential. from / cc / bcc / body are optional.",
+    ],
+    "decision": [
+        "Branch node — needs exactly 2 outgoing edges (see: sagex syntax decision-edge).",
+        "conditions[].operator is a comparison such as '==' or '!=' (see the web condition editor for the full set).",
+        "conditions[].fieldSource / valueSource: 'output' (a {{...}} reference) or 'manual' (a literal).",
+        "trueLabel / falseLabel list the target node ids taken on each branch.",
+    ],
+    "edge": [
+        "Connection between two nodes. Required: id, source, target.",
+        "type ('smoothstep') and style are UI hints — safe to keep as-is.",
+    ],
+    "decision-edge": [
+        "The two required edges out of a decision node.",
+        "sourceHandle 'true'/'false' is mandatory; label and coloured style match the web app.",
+    ],
+}
+
+_SYNTAX_KINDS = " | ".join(_SYNTAX_SNIPPETS)
 
 
 def _version_callback(value: bool) -> None:
@@ -73,6 +330,26 @@ def _default(
     """Launch the terminal app when no subcommand is given."""
     if ctx.invoked_subcommand is None:
         SagexApp().run()
+
+
+@app.command("syntax")
+def syntax_cmd(
+    kind: str = typer.Argument(..., help=f"Snippet to print: {_SYNTAX_KINDS}"),
+) -> None:
+    """Print a ready-to-copy JSON snippet for a workflow node or edge.
+
+    Paste the output into your workflow file's 'nodes' or 'edges' array,
+    then replace the TODO placeholders with real ids and values.
+
+    Run `sagex list script` / `sagex list vault` to find the ids you need.
+    """
+    snippet = _SYNTAX_SNIPPETS.get(kind)
+    if snippet is None:
+        typer.echo(f"✗ Unknown kind '{kind}'. Choose one of: {_SYNTAX_KINDS}")
+        raise typer.Exit(code=1)
+    for line in _SYNTAX_NOTES.get(kind, []):
+        render.note(f"# {line}")
+    typer.echo(json.dumps(snippet, indent=2))
 
 
 @auth_app.command("login")
@@ -457,6 +734,38 @@ def copy_key_cmd(
     typer.echo("Keys can't be copied — secrets are never written to disk.")
     typer.echo("To view a secret value interactively, use:  sagex show key <ref> --reveal")
     raise typer.Exit(code=1)
+
+
+@new_app.command("workflow")
+def new_workflow_cmd(
+    name: str = typer.Argument(..., help="Workflow display name."),
+    output: str = typer.Option(None, "--output", "-o", help="Output path (default: <workspace>/workflows/<name>.json)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite if the file already exists."),
+) -> None:
+    """Create a template workflow JSON file in your workspace, ready to edit and push."""
+    from sagex.copier import safe_name
+
+    workspace = Path(config.workspace_dir())
+    if output:
+        dest = Path(output)
+    else:
+        stem = safe_name(name, "workflow")
+        dest = workspace / "workflows" / f"{stem}.json"
+
+    if dest.exists() and not force:
+        typer.echo(f"✗ {dest} already exists. Pass --force to overwrite, or choose a different name.")
+        raise typer.Exit(code=1)
+
+    doc = dict(_WORKFLOW_TEMPLATE)
+    doc["name"] = name
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+    typer.echo(f"✓ Created {dest}")
+    render.note("  Edit the file (fill in node ids, scriptId, vaultDetails, etc.)")
+    render.note(f"  Push when ready:  sagex push workflow \"{dest}\"")
+    render.note("  See the '_doc' field in the file for a full field reference.")
 
 
 @push_app.command("workflow")

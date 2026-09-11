@@ -6,3 +6,5 @@ CLAUDE.md
 *.egg-info/
 build/
 dist/
+
+wf.json
