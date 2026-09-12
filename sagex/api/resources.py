@@ -172,6 +172,30 @@ def get_script_content(client: ApiClient, script_id) -> dict:
     return client.get(f"/api/scripts/{script_id}/content/")
 
 
+def find_script_by_name(client: ApiClient, name: str) -> dict | None:
+    """Return the script whose `name` (filename incl. extension) matches, else None.
+
+    Scripts are unique per (owner, pathname) and an API key scopes to one owner, so
+    at most one script can match a given filename. Used by `push script` to decide
+    create-vs-update without an upsert endpoint.
+    """
+    name_l = name.strip().lower()
+    for it in _as_list(client.get("/api/scripts/")):
+        if str(it.get("name") or "").lower() == name_l:
+            return it
+    return None
+
+
+def create_script(client: ApiClient, payload: dict) -> dict:
+    """POST a new script ({name, language, content}); returns the created record."""
+    return client.post("/api/scripts/", json=payload)
+
+
+def update_script(client: ApiClient, script_id, content: str) -> dict:
+    """POST new content to an existing script (bumps its version); returns the record."""
+    return client.post(f"/api/scripts/{script_id}/update/", json={"content": content})
+
+
 def resolve_run(client: ApiClient, ref: str) -> dict:
     """Resolve a run by full id, or by an id PREFIX (runs have no names).
 

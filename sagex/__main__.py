@@ -877,6 +877,75 @@ def push_workflow_cmd(
     render.note(f"  wrote id back to {path}")
 
 
+@push_app.command("script")
+def push_script_cmd(
+    ref: str = typer.Argument(..., help="Script file path, or a name under <workspace>/scripts/."),
+    name: str = typer.Option(None, "--name", help="Override the script name (letters, numbers, _ and - only)."),
+    language: str = typer.Option(None, "--language", "--lang", help="Override the language (else inferred from the file extension)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the update confirmation prompt."),
+) -> None:
+    """Push a script file — creates it, or updates the existing one after confirming.
+
+    A script's code can't carry a server id, so this matches by filename: it looks
+    for one of yours with the same name and, if found, offers to update it (bumping
+    its version); otherwise it creates a new script.
+    """
+    client = _client_or_exit()
+    workspace = Path(config.workspace_dir())
+
+    try:
+        path = pusher.resolve_script_file(workspace, ref)
+    except pusher.ScriptFileNotFound as exc:
+        if exc.matches:
+            typer.echo(f"'{exc.ref}' matches more than one file — pass the full name:")
+            for p in exc.matches:
+                typer.echo(f"  {p.name}")
+        else:
+            typer.echo(f"No script file for '{exc.ref}'. Looked at:")
+            for p in exc.looked:
+                typer.echo(f"  {p}")
+        raise typer.Exit(code=1)
+
+    try:
+        spec = pusher.script_push_spec(path, name, language)
+    except ValueError as exc:
+        typer.echo(f"✗ {exc}")
+        raise typer.Exit(code=1)
+
+    # Check-then-confirm: is there already a script of ours with this filename?
+    try:
+        existing = resources.find_script_by_name(client, spec["server_name"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    if existing:
+        sid = existing.get("id")
+        typer.echo(f"'{spec['server_name']}' already exists (id {sid}, v{existing.get('version')}, "
+                   f"updated {existing.get('updated_at')}).")
+        if not yes and not typer.confirm("  Update it? This overwrites the code and bumps the version."):
+            typer.echo("Aborted — nothing pushed.")
+            raise typer.Exit(code=1)
+        try:
+            updated = resources.update_script(client, sid, spec["content"])
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}")
+            raise typer.Exit(code=1)
+        typer.echo(f"✓ Updated '{updated.get('name')}' (id {updated.get('id')}, now v{updated.get('version')})")
+        return
+
+    # CREATE — no existing script to clobber (server rejects a duplicate pathname).
+    typer.echo(f"Creating '{spec['server_name']}' (language: {spec['language']})…")
+    try:
+        created = resources.create_script(client, {
+            "name": spec["name"], "language": spec["language"], "content": spec["content"],
+        })
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Created '{created.get('name')}' (id {created.get('id')})")
+
+
 def _check(raise_on_fail: bool) -> None:
     """Verify the stored key against the backend and print the result."""
     key = store.get_key()

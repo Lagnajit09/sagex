@@ -11,6 +11,7 @@ not unique server-side, so the id is the only reliable key.)
 """
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,32 @@ from sagex.copier import safe_name
 # Fields the workflow write endpoints accept; everything else (timestamps, id) is
 # server-owned and read-only.
 _PAYLOAD_FIELDS = ("name", "description", "nodes", "edges")
+
+# Reverse of the server's LANGUAGE_MAP (scripts/serializers.py): file extension ->
+# language keyword the create endpoint accepts. '.yml' is an alias the server lacks
+# (it stores yaml as '.yaml'), so a foo.yml pushes as foo.yaml — see script_push_spec.
+_EXT_TO_LANGUAGE = {
+    "js": "javascript", "ts": "typescript", "py": "python", "java": "java",
+    "cpp": "cpp", "c": "c", "cs": "csharp", "go": "go", "rs": "rust",
+    "rb": "ruby", "php": "php", "swift": "swift", "kt": "kotlin",
+    "ps1": "powershell", "sh": "shell", "sql": "sql", "html": "html",
+    "css": "css", "json": "json", "xml": "xml", "yaml": "yaml", "yml": "yaml",
+    "md": "markdown",
+}
+
+# language -> the extension the server will actually store the file under. Lets us
+# predict the server-side filename so create-vs-update matching is reliable.
+_LANGUAGE_EXT = {
+    "javascript": "js", "typescript": "ts", "python": "py", "java": "java",
+    "cpp": "cpp", "c": "c", "csharp": "cs", "go": "go", "rust": "rs",
+    "ruby": "rb", "php": "php", "swift": "swift", "kotlin": "kt",
+    "powershell": "ps1", "shell": "sh", "bash": "sh", "sql": "sql",
+    "html": "html", "css": "css", "json": "json", "xml": "xml",
+    "yaml": "yaml", "markdown": "md",
+}
+
+# The server's script-name rule (letters, numbers, _ and - only — no dots/spaces).
+_SCRIPT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class WorkflowFileNotFound(Exception):
@@ -130,3 +157,97 @@ def sync_meta_back(path: Path, doc: dict, server_record: dict) -> None:
         if server_record.get(key) is not None:
             doc[key] = server_record[key]
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Scripts. Unlike workflows, a script's code file can't carry a server id, so
+# `push script` identifies its target by filename and lets the CLI decide
+# create-vs-update (check-then-confirm). The language is inferred from the file
+# extension; the server owns id/version/owner/content_type.
+# ---------------------------------------------------------------------------
+
+
+class ScriptFileNotFound(Exception):
+    """No script file matched the given path-or-name (or a bare name matched several)."""
+
+    def __init__(self, ref: str, looked: list[Path], matches: list[Path] | None = None) -> None:
+        super().__init__(f"No script file for '{ref}'.")
+        self.ref = ref
+        self.looked = looked
+        self.matches = matches or []          # >1 hit when a bare name is ambiguous
+
+
+def resolve_script_file(workspace: Path, ref: str) -> Path:
+    """Find a script file by explicit path, or by name under <ws>/scripts/.
+
+    Tries: the ref as a path; then <ws>/scripts/{ref}. If ref has no extension,
+    globs <ws>/scripts/{ref}.* and returns it only when exactly one file matches
+    (raises with the candidates when several do).
+    """
+    direct = Path(ref)
+    if direct.is_file():
+        return direct
+
+    folder = workspace / "scripts"
+    exact = folder / ref
+    looked = [direct, exact]
+    if exact.is_file():
+        return exact
+
+    if "." not in ref and folder.is_dir():
+        matches = sorted(p for p in folder.glob(f"{ref}.*") if p.is_file())
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ScriptFileNotFound(ref, looked, matches=matches)
+
+    raise ScriptFileNotFound(ref, looked)
+
+
+def script_push_spec(
+    path: Path, name_override: str | None = None, language_override: str | None = None
+) -> dict:
+    """Turn a local file into a create payload + the name the server will store it as.
+
+    Returns {name, language, content, server_name}. `name` is the bare stem sent to
+    the create endpoint; `server_name` is "{name}.{ext}" — what the server stores and
+    what `find_script_by_name` matches on. Raises ValueError (with a fix hint) when
+    the extension is unmapped, the name is illegal, or the file is empty.
+    """
+    try:
+        content = path.read_text(encoding="utf-8-sig")   # strip a BOM if present
+    except OSError as exc:
+        raise ValueError(f"Couldn't read {path}: {exc}")
+
+    name = name_override or path.stem
+    ext = path.suffix.lstrip(".").lower()
+
+    if language_override:
+        language = language_override.lower()
+    else:
+        language = _EXT_TO_LANGUAGE.get(ext)
+        if not language:
+            langs = ", ".join(sorted(set(_EXT_TO_LANGUAGE.values())))
+            shown = f".{ext}" if ext else "(no extension)"
+            raise ValueError(
+                f"Can't tell the language from '{shown}'. Pass --language <lang> "
+                f"(one of: {langs})."
+            )
+
+    if language not in _LANGUAGE_EXT:
+        raise ValueError(
+            f"Unsupported language '{language}'. Supported: "
+            f"{', '.join(sorted(_LANGUAGE_EXT))}."
+        )
+
+    if not _SCRIPT_NAME_RE.match(name):
+        raise ValueError(
+            f"Script name '{name}' isn't allowed — the server accepts only letters, "
+            f"numbers, '_' and '-' (no dots or spaces). Pass --name <name> to override."
+        )
+
+    if not content.strip():
+        raise ValueError("Script content is empty — nothing to push.")
+
+    server_name = f"{name}.{_LANGUAGE_EXT[language]}"
+    return {"name": name, "language": language, "content": content, "server_name": server_name}
