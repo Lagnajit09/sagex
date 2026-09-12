@@ -289,6 +289,16 @@ def _vault_name(client: ApiClient, vault_id) -> str | None:
         return None
 
 
+def _vault_name_map(client: ApiClient) -> dict:
+    """Map every vault id -> name in one call. Used to label ambiguous matches by vault."""
+    return {str(v.get("id")): v.get("name") for v in _as_list(client.get("/api/vault/vaults/"))}
+
+
+def _dotted(*parts) -> str:
+    """Join non-empty hint parts with ' · ' (e.g. 'ssh · Prod')."""
+    return " · ".join(str(p) for p in parts if p)
+
+
 def resolve_credential(client: ApiClient, ref: str) -> dict:
     """Resolve a vault credential (key) by id or name; returns the MASKED record.
 
@@ -301,14 +311,50 @@ def resolve_credential(client: ApiClient, ref: str) -> dict:
     if not hits:
         raise ResourceNotFound("key", ref)
     if len(hits) > 1:
+        vmap = _vault_name_map(client)
         raise AmbiguousResource("key", ref, [
             {"id": c.get("id"), "name": c.get("name") or "(unnamed)",
-             "hint": c.get("credential_type") or ""}
+             "hint": _dotted(c.get("credential_type"), vmap.get(str(c.get("vault"))))}
             for c in hits
         ])
     cred = client.get(f"/api/vault/credentials/{hits[0]['id']}/")
     cred["vault_name"] = _vault_name(client, cred.get("vault"))
     return cred
+
+
+def find_credential_in_vault(vault: dict, ref: str) -> dict | None:
+    """Match a credential by id or name within a vault's nested `credentials` list.
+
+    A vault detail record carries its credentials inline, so this needs no API call.
+    Used to enforce (client-side, with a clear error) that a server's attached key
+    lives in the same vault. Credential names are unique per vault, so no ambiguity.
+    """
+    creds = vault.get("credentials") or []
+    for c in creds:                                   # exact id first
+        if str(c.get("id")) == ref:
+            return c
+    ref_l = ref.strip().lower()
+    for c in creds:
+        if str(c.get("name") or "").lower() == ref_l:
+            return c
+    return None
+
+
+def find_server_in_vault(vault: dict, ref: str) -> dict | None:
+    """Match a server by id or name within a vault's nested `servers` list.
+
+    Server names are unique per vault, so scoping a lookup to one vault is always
+    unambiguous — used by `update server --vault` to disambiguate a shared name.
+    """
+    servers = vault.get("servers") or []
+    for s in servers:                                 # exact id first
+        if str(s.get("id")) == ref:
+            return s
+    ref_l = ref.strip().lower()
+    for s in servers:
+        if str(s.get("name") or "").lower() == ref_l:
+            return s
+    return None
 
 
 def reveal_credential(client: ApiClient, credential_id) -> dict:
@@ -331,14 +377,33 @@ def resolve_server(client: ApiClient, ref: str) -> dict:
     if not hits:
         raise ResourceNotFound("server", ref)
     if len(hits) > 1:
+        vmap = _vault_name_map(client)
         raise AmbiguousResource("server", ref, [
             {"id": s.get("id"), "name": s.get("name") or "(unnamed)",
-             "hint": s.get("host") or ""}
+             "hint": _dotted(s.get("host"), vmap.get(str(s.get("vault"))))}
             for s in hits
         ])
     server = client.get(f"/api/vault/servers/{hits[0]['id']}/")
     server["vault_name"] = _vault_name(client, server.get("vault"))
     return server
+
+
+def create_server(client: ApiClient, payload: dict) -> dict:
+    """POST a new vault server; returns the created record.
+
+    Payload: {vault, name, host, connection_method, port} plus optional {credential}.
+    `vault` and `credential` are UUID ids; the credential must belong to that vault.
+    """
+    return client.post("/api/vault/servers/", json=payload)
+
+
+def update_server(client: ApiClient, server_id, payload: dict) -> dict:
+    """Update a server (the server treats PUT as partial, so send only changed fields).
+
+    Any of name/host/port/connection_method/credential. Set credential to None to
+    unlink the current key; a credential id must belong to the server's vault.
+    """
+    return client.put(f"/api/vault/servers/{server_id}/", json=payload)
 
 
 def resolve_vault(client: ApiClient, ref: str) -> dict:

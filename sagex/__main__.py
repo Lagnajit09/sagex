@@ -908,6 +908,152 @@ def update_vault_cmd(
     typer.echo(f"✓ Updated vault '{updated.get('name')}' (id {updated.get('id')})")
 
 
+@create_app.command("server")
+def create_server_cmd(
+    name: str = typer.Argument(..., help="Server name (unique within the vault)."),
+    vault: str = typer.Option(..., "--vault", help="Vault name or id to create the server in (required)."),
+    host: str = typer.Option(..., "--host", help="Hostname or IP address (required)."),
+    method: str = typer.Option(..., "--method", "-m", help="Connection method: ssh or winrm (required)."),
+    port: int = typer.Option(None, "--port", "-p", help="Port (default: 22 for ssh, 5985 for winrm)."),
+    key: str = typer.Option(None, "--key", "-k", help="Credential (key) name or id to attach — must be in the same vault."),
+) -> None:
+    """Create a vault server (SSH or WinRM). Optionally attach a credential with --key."""
+    method = method.lower()
+    if method not in ("ssh", "winrm"):
+        typer.echo("✗ --method must be 'ssh' or 'winrm'.")
+        raise typer.Exit(code=1)
+    if port is None:
+        port = 22 if method == "ssh" else 5985
+    elif not 1 <= port <= 65535:
+        typer.echo("✗ --port must be between 1 and 65535.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+    v = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+
+    # Server name is unique within its vault — check the vault's existing servers.
+    for s in (v.get("servers") or []):
+        if str(s.get("name") or "").lower() == name.strip().lower():
+            typer.echo(f"✗ Vault '{v.get('name')}' already has a server named '{name}' (id {s.get('id')}).")
+            raise typer.Exit(code=1)
+
+    payload = {
+        "vault": v["id"],
+        "name": name,
+        "host": host,
+        "connection_method": method,
+        "port": port,
+    }
+
+    cred = None
+    if key:
+        cred = resources.find_credential_in_vault(v, key)
+        if not cred:
+            typer.echo(f"✗ No credential '{key}' in vault '{v.get('name')}'.")
+            typer.echo(f"  A server's key must live in the same vault. See:  sagex show vault \"{v.get('name')}\"")
+            raise typer.Exit(code=1)
+        payload["credential"] = cred["id"]
+
+    try:
+        created = resources.create_server(client, payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"✓ Created server '{created.get('name')}' (id {created.get('id')}) in vault '{v.get('name')}'")
+    attached = f" · key: {cred.get('name')}" if cred else " · no key attached"
+    render.note(f"  {method} · {host}:{port}{attached}")
+
+
+@update_app.command("server")
+def update_server_cmd(
+    ref: str = typer.Argument(..., help="Server name or id."),
+    name: str = typer.Option(None, "--name", help="New server name (unique within its vault)."),
+    host: str = typer.Option(None, "--host", help="New hostname or IP address."),
+    method: str = typer.Option(None, "--method", "-m", help="New connection method: ssh or winrm."),
+    port: int = typer.Option(None, "--port", "-p", help="New port (1-65535)."),
+    key: str = typer.Option(None, "--key", "-k", help="Attach a credential (name or id) from the same vault."),
+    unlink_key: bool = typer.Option(False, "--unlink-key", help="Detach the currently attached credential."),
+    vault: str = typer.Option(None, "--vault", help="Scope the lookup to this vault (name or id) — use when the same server name exists in multiple vaults."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Update a vault server's fields and/or its attached credential."""
+    if key and unlink_key:
+        typer.echo("✗ Use either --key or --unlink-key, not both.")
+        raise typer.Exit(code=1)
+    if name is None and host is None and method is None and port is None and not key and not unlink_key:
+        typer.echo("Nothing to update — pass --name/--host/--method/--port/--key/--unlink-key.")
+        raise typer.Exit(code=1)
+
+    if method is not None:
+        method = method.lower()
+        if method not in ("ssh", "winrm"):
+            typer.echo("✗ --method must be 'ssh' or 'winrm'.")
+            raise typer.Exit(code=1)
+    if port is not None and not 1 <= port <= 65535:
+        typer.echo("✗ --port must be between 1 and 65535.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+
+    # --vault scopes the lookup to one vault (names are unique there); otherwise
+    # resolve globally, which reports an ambiguity if the name spans vaults.
+    vault_detail = None
+    if vault:
+        vault_detail = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+        server = resources.find_server_in_vault(vault_detail, ref)
+        if not server:
+            typer.echo(f"✗ No server '{ref}' in vault '{vault_detail.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        server = _resolve_or_exit(resources.resolve_server, client, ref, "server")
+
+    payload: dict = {}
+    if name is not None:
+        payload["name"] = name
+    if host is not None:
+        payload["host"] = host
+    if method is not None:
+        payload["connection_method"] = method
+    if port is not None:
+        payload["port"] = port
+
+    # A rename or a key change both need the vault detail (its servers + credentials
+    # lists). Reuse the one fetched for --vault, else fetch by the server's vault id.
+    if (name is not None or key) and vault_detail is None:
+        vault_detail = _resolve_or_exit(resources.resolve_vault, client, server.get("vault"), "vault")
+
+    if name is not None:
+        for s in (vault_detail.get("servers") or []):
+            if str(s.get("id")) != str(server.get("id")) and str(s.get("name") or "").lower() == name.strip().lower():
+                typer.echo(f"✗ Vault '{vault_detail.get('name')}' already has another server named '{name}'.")
+                raise typer.Exit(code=1)
+
+    cred = None
+    if key:
+        cred = resources.find_credential_in_vault(vault_detail, key)
+        if not cred:
+            typer.echo(f"✗ No credential '{key}' in this server's vault '{vault_detail.get('name')}'.")
+            typer.echo(f"  A server's key must live in the same vault. See:  sagex show vault \"{vault_detail.get('name')}\"")
+            raise typer.Exit(code=1)
+        payload["credential"] = cred["id"]
+    elif unlink_key:
+        payload["credential"] = None
+
+    typer.echo(f"Updating server '{server.get('name')}' (id {str(server.get('id'))[:8]}…)")
+    if not yes and not typer.confirm("  Apply these changes?"):
+        typer.echo("Aborted — nothing changed.")
+        raise typer.Exit(code=1)
+
+    try:
+        updated = resources.update_server(client, server["id"], payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"✓ Updated server '{updated.get('name')}' (id {updated.get('id')})")
+
+
 @push_app.command("workflow")
 def push_workflow_cmd(
     ref: str = typer.Argument(..., help="Workflow file path, or a name under <workspace>/workflows/."),
