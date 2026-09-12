@@ -5,6 +5,7 @@ This is the CLI-side presentation layer: it takes the plain data returned by
 same data as widgets later; only this file is CLI-specific.
 """
 
+import difflib
 from datetime import datetime
 
 from rich.cells import cell_len
@@ -269,6 +270,33 @@ def script(meta: dict, content: dict | None) -> None:
         lexer = _lexer_for(content.get("name") or meta.get("name") or "",
                            content.get("content_type") or meta.get("content_type") or "")
         console.print(Syntax(code, lexer, theme="ansi_dark", line_numbers=True, word_wrap=True))
+
+
+def script_diff(name: str, server_code: str, local_code: str) -> bool:
+    """Print a unified diff of server→local script code. Returns True if they differ.
+
+    `-` lines are the current server version (about to be overwritten), `+` lines are
+    the local file. Used by `push script` to preview an update before it bumps the
+    version. Line-based; a difference in trailing newline alone is treated as no change.
+    """
+    diff = list(difflib.unified_diff(
+        server_code.splitlines(), local_code.splitlines(),
+        fromfile=f"server:{name}", tofile=f"local:{name}", lineterm="",
+    ))
+    if not diff:
+        return False
+    for line in diff:
+        if line.startswith(("+++", "---")):
+            console.print(Text(line, style="bold"))
+        elif line.startswith("@@"):
+            console.print(Text(line, style="cyan"))
+        elif line.startswith("+"):
+            console.print(Text(line, style="green"))
+        elif line.startswith("-"):
+            console.print(Text(line, style="red"))
+        else:
+            console.print(Text(line, style="bright_black"))
+    return True
 
 
 # --- run -------------------------------------------------------------------

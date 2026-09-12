@@ -47,6 +47,55 @@ _LANGUAGE_EXT = {
 # The server's script-name rule (letters, numbers, _ and - only — no dots/spaces).
 _SCRIPT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# Comment syntax per language, for the `new script` scaffold header.
+_LINE_COMMENT = {
+    "python": "#", "shell": "#", "bash": "#", "ruby": "#", "yaml": "#", "powershell": "#",
+    "javascript": "//", "typescript": "//", "java": "//", "cpp": "//", "c": "//",
+    "csharp": "//", "go": "//", "rust": "//", "php": "//", "swift": "//", "kotlin": "//",
+    "sql": "--",
+}
+_BLOCK_COMMENT = {
+    "css": ("/*", "*/"),
+    "html": ("<!--", "-->"),
+    "xml": ("<!--", "-->"),
+    "markdown": ("<!--", "-->"),
+}
+
+# The scaffold header body (language-agnostic; re-prefixed with each language's comment
+# char). Documents how params/secrets reach a script and how to emit output — this
+# mirrors the Autosage exec engine: params are injected as environment variables (and
+# {{NAME}} placeholders are substituted in the body before the run).
+_SCRIPT_DOC_LINES = [
+    "Script created by `sagex new script`.",
+    "Edit it, then push it with:  sagex push script <this-file>",
+    "",
+    "PARAMETERS  (defined on the workflow's script node)",
+    "  Each parameter is delivered to this script as an environment variable named",
+    "  exactly as it is declared:",
+    "    bash / shell :  $NAME   or  ${NAME}",
+    "    powershell   :  $env:NAME",
+    "  You can also write {{NAME}} inline in this file (double braces, case-insensitive);",
+    "  Autosage substitutes the value before the script runs.",
+    "  Parameter names must be letters/digits/underscore and not start with a digit",
+    "  (e.g. SERVICE_NAME). Names that don't qualify are skipped.",
+    "",
+    'SECRETS  (parameters of type "password", or a value from a vault credential)',
+    "  Delivered the same way, as an environment variable ($PASSWORD / $env:PASSWORD).",
+    "  They are never placed on the command line, so they stay out of the process list.",
+    "  Do NOT print or echo secrets: log masking is a safety net, not a guarantee.",
+    "",
+    "OUTPUT FOR LATER NODES",
+    '  Print a JSON object to stdout, e.g.  {"status": "active", "exists": true}',
+    "  Later nodes then read those fields as  {{this-node-id.output.status}}.",
+    "  To use an upstream node's output here, set a parameter's value to",
+    "  {{other-node-id.output.field}} and read that parameter as $NAME.",
+    "",
+    "EXIT CODE",
+    "  Exit 0 means success; a non-zero exit marks this node failed and can stop the run.",
+    "",
+    "Write your code below.",
+]
+
 
 class WorkflowFileNotFound(Exception):
     """No workflow file matched the given path-or-name."""
@@ -251,3 +300,44 @@ def script_push_spec(
 
     server_name = f"{name}.{_LANGUAGE_EXT[language]}"
     return {"name": name, "language": language, "content": content, "server_name": server_name}
+
+
+def infer_script_language(path: Path) -> str | None:
+    """Best-effort language keyword from a file path's extension (None if unknown)."""
+    return _EXT_TO_LANGUAGE.get(path.suffix.lstrip(".").lower())
+
+
+def _render_script_header(language: str) -> str:
+    """The scaffold doc lines wrapped in `language`'s comment syntax ('' if none)."""
+    block = _BLOCK_COMMENT.get(language)
+    if block:
+        open_, close_ = block
+        body = "\n".join(f"  {line}".rstrip() for line in _SCRIPT_DOC_LINES)
+        return f"{open_}\n{body}\n{close_}\n\n"
+    prefix = _LINE_COMMENT.get(language)
+    if not prefix:
+        return ""                                   # e.g. json — no comment syntax
+    body = "\n".join(f"{prefix} {line}".rstrip() for line in _SCRIPT_DOC_LINES)
+    return f"{body}\n\n"
+
+
+def script_scaffold(name: str, language: str) -> tuple[str, str]:
+    """Return (filename, file_content) for `sagex new script`.
+
+    filename is "<name>.<ext>" for the language's server-side extension; content is a
+    starter header (in the language's comment style) documenting how parameters and
+    secrets reach the script. Raises ValueError on an illegal name or unknown language.
+    """
+    language = language.lower()
+    if language not in _LANGUAGE_EXT:
+        raise ValueError(
+            f"Unsupported language '{language}'. Supported: {', '.join(sorted(_LANGUAGE_EXT))}."
+        )
+    if not _SCRIPT_NAME_RE.match(name):
+        raise ValueError(
+            f"Script name '{name}' isn't allowed — the server accepts only letters, "
+            f"numbers, '_' and '-' (no dots or spaces)."
+        )
+    filename = f"{name}.{_LANGUAGE_EXT[language]}"
+    content = _render_script_header(language) or "{}\n"   # json has no comments
+    return filename, content

@@ -800,6 +800,40 @@ def new_workflow_cmd(
     render.note("  See the '_doc' field in the file for a full field reference.")
 
 
+@new_app.command("script")
+def new_script_cmd(
+    name: str = typer.Argument(..., help="Script name (letters, numbers, _ and - only)."),
+    language: str = typer.Option(None, "--language", "--lang", help="Language, e.g. shell, python, powershell (inferred from --output's extension if omitted)."),
+    output: str = typer.Option(None, "--output", "-o", help="Output path (default: <workspace>/scripts/<name>.<ext>)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite if the file already exists."),
+) -> None:
+    """Create a starter script file with a header explaining how params & secrets reach it."""
+    workspace = Path(config.workspace_dir())
+
+    lang = language or (pusher.infer_script_language(Path(output)) if output else None)
+    if not lang:
+        typer.echo("Give a --language (e.g. shell, python, powershell), or an --output path with a known extension.")
+        raise typer.Exit(code=1)
+
+    try:
+        filename, content = pusher.script_scaffold(name, lang)
+    except ValueError as exc:
+        typer.echo(f"✗ {exc}")
+        raise typer.Exit(code=1)
+
+    dest = Path(output) if output else workspace / "scripts" / filename
+    if dest.exists() and not force:
+        typer.echo(f"✗ {dest} already exists. Pass --force to overwrite, or choose a different name.")
+        raise typer.Exit(code=1)
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+
+    typer.echo(f"✓ Created {dest}")
+    render.note("  Read the header — it explains how parameters and secrets reach the script.")
+    render.note(f"  Push when ready:  sagex push script \"{dest}\"")
+
+
 @push_app.command("workflow")
 def push_workflow_cmd(
     ref: str = typer.Argument(..., help="Workflow file path, or a name under <workspace>/workflows/."),
@@ -923,6 +957,18 @@ def push_script_cmd(
         sid = existing.get("id")
         typer.echo(f"'{spec['server_name']}' already exists (id {sid}, v{existing.get('version')}, "
                    f"updated {existing.get('updated_at')}).")
+
+        # Preview what the update would overwrite (best-effort; don't block on a fetch error).
+        try:
+            server_code = (resources.get_script_content(client, sid) or {}).get("content") or ""
+        except ApiError as exc:
+            server_code = None
+            render.note(f"  (couldn't fetch the current version to diff: {exc.message})")
+
+        if server_code is not None and not render.script_diff(spec["server_name"], server_code, spec["content"]):
+            typer.echo("Local file matches the server copy — nothing to update.")
+            return
+
         if not yes and not typer.confirm("  Update it? This overwrites the code and bumps the version."):
             typer.echo("Aborted — nothing pushed.")
             raise typer.Exit(code=1)
