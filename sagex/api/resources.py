@@ -366,6 +366,25 @@ def reveal_credential(client: ApiClient, credential_id) -> dict:
     return client.get(f"/api/vault/credentials/{credential_id}/reveal/")
 
 
+def create_credential(client: ApiClient, payload: dict) -> dict:
+    """POST a new credential; returns the MASKED record (secrets are write-only).
+
+    Payload: {vault, name, credential_type} plus the secret fields for that type.
+    Secrets travel as plaintext in the body and are encrypted server-side (TLS on the
+    wire). `vault` is a UUID and must be owned by the caller.
+    """
+    return client.post("/api/vault/credentials/", json=payload)
+
+
+def update_credential(client: ApiClient, credential_id, payload: dict) -> dict:
+    """Update a credential (the server treats PUT as partial); returns the masked record.
+
+    Send only the fields being changed; omitted secrets are left untouched. Secrets
+    travel as plaintext in the body (encrypted server-side).
+    """
+    return client.put(f"/api/vault/credentials/{credential_id}/", json=payload)
+
+
 def resolve_server(client: ApiClient, ref: str) -> dict:
     """Resolve a vault server by id or name; returns its detail (enriched).
 

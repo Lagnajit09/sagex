@@ -430,6 +430,79 @@ def _resolve_or_exit(resolve, client, ref: str, kind: str):
         raise typer.Exit(code=1)
 
 
+# ---------------------------------------------------------------------------
+# Credential (key) input helpers. Secrets are entered interactively (hidden) or
+# read from an existing file; they are NEVER accepted as flag values (which would
+# leak into shell history / ps) and are NEVER written to disk by us.
+# ---------------------------------------------------------------------------
+
+_KEY_TYPES = {
+    "username_password": "username_password", "up": "username_password",
+    "user": "username_password", "password": "username_password",
+    "ssh_key": "ssh_key", "ssh": "ssh_key", "key": "ssh_key",
+    "certificate": "certificate", "cert": "certificate",
+}
+_KEY_TYPE_CHOICES = "username_password | ssh_key | certificate"
+
+
+def _normalize_key_type(value: str) -> str:
+    """Map a user-supplied --type (incl. aliases like 'ssh'/'cert') to a server value."""
+    ctype = _KEY_TYPES.get(value.strip().lower())
+    if not ctype:
+        typer.echo(f"✗ --type must be one of: {_KEY_TYPE_CHOICES}.")
+        raise typer.Exit(code=1)
+    return ctype
+
+
+def _prompt_secret(label: str, *, confirm: bool) -> str:
+    """Prompt for a single-line secret with hidden input (optionally confirmed)."""
+    return typer.prompt(label, hide_input=True, confirmation_prompt=confirm)
+
+
+def _prompt_optional_secret(label: str) -> str:
+    """Prompt for an optional single-line secret (hidden); '' if left blank."""
+    return typer.prompt(label, hide_input=True, default="", show_default=False)
+
+
+def _read_secret_file(path_str: str) -> str:
+    """Read a multi-line secret (key/cert) from an existing file. Never written back."""
+    p = Path(path_str).expanduser()
+    if not p.is_file():
+        typer.echo(f"✗ No such file: {p}")
+        raise typer.Exit(code=1)
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"✗ Couldn't read {p}: {exc}")
+        raise typer.Exit(code=1)
+
+
+def _paste_secret(label: str) -> str:
+    """Read a multi-line secret pasted into the terminal, ended with EOF."""
+    typer.echo(f"  Paste the {label}, then press Ctrl-D (Ctrl-Z then Enter on Windows) on a blank line:")
+    return sys.stdin.read()
+
+
+def _acquire_multiline(label: str, file_opt: str | None, *, paste_when_none: bool) -> str | None:
+    """Get a multi-line secret from a file path, from '-' (paste), or by paste.
+
+    file_opt: a path, or '-' to paste, or None. When None: paste if paste_when_none
+    (the create flow), else return None (the update flow — leave the field unchanged).
+    """
+    if file_opt == "-":
+        content = _paste_secret(label)
+    elif file_opt:
+        content = _read_secret_file(file_opt)
+    elif paste_when_none:
+        content = _paste_secret(label)
+    else:
+        return None
+    if not content.strip():
+        typer.echo(f"✗ {label} is empty.")
+        raise typer.Exit(code=1)
+    return content
+
+
 @show_app.command("workflow")
 def show_workflow_cmd(
     ref: str = typer.Argument(..., help="Workflow name or id."),
@@ -965,6 +1038,57 @@ def create_server_cmd(
     render.note(f"  {method} · {host}:{port}{attached}")
 
 
+@create_app.command("key")
+def create_key_cmd(
+    name: str = typer.Argument(..., help="Credential name (unique within the vault)."),
+    vault: str = typer.Option(..., "--vault", help="Vault name or id to create the key in (required)."),
+    type_: str = typer.Option(..., "--type", "-t", help=f"Credential type: {_KEY_TYPE_CHOICES} (aliases: ssh, cert)."),
+    username: str = typer.Option(None, "--username", "-u", help="Username (username_password type; prompted if omitted)."),
+    key_file: str = typer.Option(None, "--key-file", help="SSH private key file path, or - to paste (ssh_key type)."),
+    cert_file: str = typer.Option(None, "--cert-file", help="Certificate PEM file path, or - to paste (certificate type)."),
+) -> None:
+    """Create a vault credential (key). Secrets are entered securely — never via flags."""
+    ctype = _normalize_key_type(type_)
+
+    # Reject flags that don't match the chosen type (fast, before any network/prompt).
+    if username is not None and ctype != "username_password":
+        typer.echo("✗ --username only applies to a username_password key.")
+        raise typer.Exit(code=1)
+    if key_file is not None and ctype != "ssh_key":
+        typer.echo("✗ --key-file only applies to an ssh_key key.")
+        raise typer.Exit(code=1)
+    if cert_file is not None and ctype != "certificate":
+        typer.echo("✗ --cert-file only applies to a certificate key.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+    v = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+
+    # Name is unique within the vault — check BEFORE prompting for any secret.
+    if resources.find_credential_in_vault(v, name):
+        typer.echo(f"✗ Vault '{v.get('name')}' already has a key named '{name}'.")
+        raise typer.Exit(code=1)
+
+    payload = {"vault": v["id"], "name": name, "credential_type": ctype}
+    if ctype == "username_password":
+        payload["username"] = username if username is not None else typer.prompt("Username")
+        payload["password"] = _prompt_secret("Password", confirm=True)
+    elif ctype == "ssh_key":
+        payload["ssh_key"] = _acquire_multiline("SSH private key", key_file, paste_when_none=True)
+        passphrase = _prompt_optional_secret("Key passphrase (leave blank if none)")
+        if passphrase:
+            payload["key_passphrase"] = passphrase
+    else:  # certificate
+        payload["cert_pem"] = _acquire_multiline("certificate PEM", cert_file, paste_when_none=True)
+
+    try:
+        created = resources.create_credential(client, payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Created key '{created.get('name')}' (id {created.get('id')}, type {ctype}) in vault '{v.get('name')}'")
+
+
 @update_app.command("server")
 def update_server_cmd(
     ref: str = typer.Argument(..., help="Server name or id."),
@@ -1052,6 +1176,95 @@ def update_server_cmd(
         raise typer.Exit(code=1)
 
     typer.echo(f"✓ Updated server '{updated.get('name')}' (id {updated.get('id')})")
+
+
+@update_app.command("key")
+def update_key_cmd(
+    ref: str = typer.Argument(..., help="Credential (key) name or id."),
+    vault: str = typer.Option(None, "--vault", help="Scope the lookup to this vault (name or id) — for a name shared across vaults."),
+    name: str = typer.Option(None, "--name", help="New name for the key."),
+    username: str = typer.Option(None, "--username", "-u", help="New username (username_password keys)."),
+    set_password: bool = typer.Option(False, "--set-password", help="Prompt for a new password (hidden)."),
+    key_file: str = typer.Option(None, "--key-file", help="Replace the SSH key from this file path, or - to paste."),
+    set_passphrase: bool = typer.Option(False, "--set-passphrase", help="Prompt for a new key passphrase (blank clears it)."),
+    cert_file: str = typer.Option(None, "--cert-file", help="Replace the certificate PEM from this file path, or - to paste."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Update a vault credential — rename or rotate a secret. Secrets entered securely."""
+    if not (name is not None or username is not None or set_password
+            or set_passphrase or key_file is not None or cert_file is not None):
+        typer.echo("Nothing to update — pass --name/--username/--set-password/--key-file/--set-passphrase/--cert-file.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+
+    # --vault scopes the lookup (names are unique per vault); else resolve globally.
+    if vault:
+        vd = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+        cred = resources.find_credential_in_vault(vd, ref)
+        if not cred:
+            typer.echo(f"✗ No key '{ref}' in vault '{vd.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        cred = _resolve_or_exit(resources.resolve_credential, client, ref, "key")
+        vd = None
+
+    ctype = cred.get("credential_type")
+
+    # Only allow changes that match the key's type (update can't change the type).
+    if (username is not None or set_password) and ctype != "username_password":
+        typer.echo(f"✗ This key is type '{ctype}'; --username/--set-password only apply to username_password.")
+        raise typer.Exit(code=1)
+    if (key_file is not None or set_passphrase) and ctype != "ssh_key":
+        typer.echo(f"✗ This key is type '{ctype}'; --key-file/--set-passphrase only apply to ssh_key.")
+        raise typer.Exit(code=1)
+    if cert_file is not None and ctype != "certificate":
+        typer.echo(f"✗ This key is type '{ctype}'; --cert-file only applies to certificate.")
+        raise typer.Exit(code=1)
+
+    # Rename clash guard within the same vault.
+    if name is not None:
+        if vd is None:
+            vd = _resolve_or_exit(resources.resolve_vault, client, cred.get("vault"), "vault")
+        clash = resources.find_credential_in_vault(vd, name)
+        if clash and str(clash.get("id")) != str(cred.get("id")):
+            typer.echo(f"✗ Vault '{vd.get('name')}' already has another key named '{name}'.")
+            raise typer.Exit(code=1)
+
+    # Confirm the intended changes BEFORE entering any secret value.
+    changes = []
+    if name is not None:        changes.append(f"rename to '{name}'")
+    if username is not None:     changes.append("set username")
+    if set_password:            changes.append("new password")
+    if key_file is not None:     changes.append("replace SSH key")
+    if set_passphrase:          changes.append("new passphrase")
+    if cert_file is not None:    changes.append("replace certificate")
+    typer.echo(f"Updating key '{cred.get('name')}' (id {str(cred.get('id'))[:8]}…): {', '.join(changes)}")
+    if not yes and not typer.confirm("  Proceed?"):
+        typer.echo("Aborted — nothing changed.")
+        raise typer.Exit(code=1)
+
+    # Collect values (prompts / files) only after confirmation.
+    payload: dict = {}
+    if name is not None:
+        payload["name"] = name
+    if username is not None:
+        payload["username"] = username
+    if set_password:
+        payload["password"] = _prompt_secret("New password", confirm=True)
+    if key_file is not None:
+        payload["ssh_key"] = _acquire_multiline("SSH private key", key_file, paste_when_none=False)
+    if set_passphrase:
+        payload["key_passphrase"] = _prompt_optional_secret("New key passphrase (blank to clear)")
+    if cert_file is not None:
+        payload["cert_pem"] = _acquire_multiline("certificate PEM", cert_file, paste_when_none=False)
+
+    try:
+        updated = resources.update_credential(client, cred["id"], payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Updated key '{updated.get('name')}' (id {updated.get('id')})")
 
 
 @push_app.command("workflow")
