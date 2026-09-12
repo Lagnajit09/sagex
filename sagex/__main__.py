@@ -58,6 +58,12 @@ app.add_typer(push_app, name="push")
 new_app = typer.Typer(help="Scaffold new local resource files ready to edit and push.")
 app.add_typer(new_app, name="new")
 
+create_app = typer.Typer(help="Create server-side resources (vaults, servers, keys).")
+app.add_typer(create_app, name="create")
+
+update_app = typer.Typer(help="Update server-side resources (vaults, servers, keys).")
+app.add_typer(update_app, name="update")
+
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
 
@@ -832,6 +838,74 @@ def new_script_cmd(
     typer.echo(f"✓ Created {dest}")
     render.note("  Read the header — it explains how parameters and secrets reach the script.")
     render.note(f"  Push when ready:  sagex push script \"{dest}\"")
+
+
+@create_app.command("vault")
+def create_vault_cmd(
+    name: str = typer.Argument(..., help="Vault name (must be unique among your vaults)."),
+    description: str = typer.Option("", "--description", "-d", help="Optional description."),
+) -> None:
+    """Create a new vault — a container for servers and credentials."""
+    client = _client_or_exit()
+
+    # Name is unique per owner; check first (the server's duplicate error shape varies).
+    try:
+        existing = resources.find_vault_by_name(client, name)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    if existing:
+        typer.echo(f"✗ You already have a vault named '{name}' (id {existing.get('id')}).")
+        typer.echo(f"  To change it, run:  sagex update vault \"{name}\" --description \"…\"")
+        raise typer.Exit(code=1)
+
+    try:
+        created = resources.create_vault(client, {"name": name, "description": description})
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Created vault '{created.get('name')}' (id {created.get('id')})")
+
+
+@update_app.command("vault")
+def update_vault_cmd(
+    ref: str = typer.Argument(..., help="Vault name or id."),
+    name: str = typer.Option(None, "--name", help="New name for the vault."),
+    description: str = typer.Option(None, "--description", "-d", help="New description."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Update a vault's name and/or description."""
+    if name is None and description is None:
+        typer.echo("Nothing to update — pass --name and/or --description.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+    vault = _resolve_or_exit(resources.resolve_vault, client, ref, "vault")
+
+    payload: dict = {}
+    if name is not None:
+        payload["name"] = name
+    if description is not None:
+        payload["description"] = description
+
+    # Guard a rename against colliding with another of your vaults.
+    if name is not None and name.strip().lower() != str(vault.get("name") or "").lower():
+        clash = resources.find_vault_by_name(client, name)
+        if clash and str(clash.get("id")) != str(vault.get("id")):
+            typer.echo(f"✗ You already have another vault named '{name}' (id {clash.get('id')}).")
+            raise typer.Exit(code=1)
+
+    typer.echo(f"Updating vault '{vault.get('name')}' (id {str(vault.get('id'))[:8]}…)")
+    if not yes and not typer.confirm("  Apply these changes?"):
+        typer.echo("Aborted — nothing changed.")
+        raise typer.Exit(code=1)
+
+    try:
+        updated = resources.update_vault(client, vault["id"], payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Updated vault '{updated.get('name')}' (id {updated.get('id')})")
 
 
 @push_app.command("workflow")

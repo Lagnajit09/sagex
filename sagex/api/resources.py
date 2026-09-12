@@ -356,6 +356,30 @@ def resolve_vault(client: ApiClient, ref: str) -> dict:
     return client.get(f"/api/vault/vaults/{hits[0]['id']}/")
 
 
+def find_vault_by_name(client: ApiClient, name: str) -> dict | None:
+    """Return the vault whose name matches (case-insensitive), or None.
+
+    Vault names are unique per owner and the API key scopes to one owner, so at most
+    one matches. Used by `create/update vault` to check for a name clash first, since
+    the server's duplicate-name error shape isn't guaranteed.
+    """
+    name_l = name.strip().lower()
+    for it in _as_list(client.get("/api/vault/vaults/")):
+        if str(it.get("name") or "").lower() == name_l:
+            return it
+    return None
+
+
+def create_vault(client: ApiClient, payload: dict) -> dict:
+    """POST a new vault ({name, description}); returns the created record."""
+    return client.post("/api/vault/vaults/", json=payload)
+
+
+def update_vault(client: ApiClient, vault_id, payload: dict) -> dict:
+    """Update a vault (the server treats PUT as partial, so send only changed fields)."""
+    return client.put(f"/api/vault/vaults/{vault_id}/", json=payload)
+
+
 # ---------------------------------------------------------------------------
 # Full-list helpers for the `sagex list` commands.
 # ---------------------------------------------------------------------------
