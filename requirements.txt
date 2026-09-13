@@ -19,3 +19,6 @@ keyring==25.7.0
 
 # CLI framework for subcommands (sagex auth login/status/logout).
 typer==0.27.2
+
+# Human-readable descriptions of cron expressions (schedule triggers).
+cron-descriptor==2.1.0

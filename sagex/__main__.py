@@ -67,6 +67,9 @@ app.add_typer(update_app, name="update")
 delete_app = typer.Typer(help="Delete server-side resources (asks for confirmation).")
 app.add_typer(delete_app, name="delete")
 
+trigger_app = typer.Typer(help="Configure workflow triggers (HTTP webhooks and schedules).")
+app.add_typer(trigger_app, name="trigger")
+
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
 
@@ -1405,6 +1408,170 @@ def delete_key_cmd(
         typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
     typer.echo(f"✓ Deleted key '{cred.get('name')}' (id {cred.get('id')})")
+
+
+@delete_app.command("trigger")
+def delete_trigger_cmd(
+    ref: str = typer.Argument(..., help="Workflow name, or trigger id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete a trigger (HTTP or schedule)."""
+    client = _client_or_exit()
+    kind, t = _resolve_or_exit(resources.resolve_trigger, client, ref, "trigger")
+    _confirm_delete_or_abort("trigger", f"{t.get('workflow_name')} ({kind})", t.get("id"), yes)
+    try:
+        resources.delete_trigger(client, t.get("workflow_id"), kind, t.get("node_id"))
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted {kind} trigger for '{t.get('workflow_name')}'")
+
+
+# ---------------------------------------------------------------------------
+# Trigger configuration (dedicated `trigger` sub-app). create/regenerate target a
+# workflow's trigger NODE; enable/disable/invoke act on an existing trigger.
+# ---------------------------------------------------------------------------
+
+
+def _pick_trigger_node(wf: dict, dtype: str, node_opt: str | None) -> str:
+    """Return the id of the workflow's <dtype> trigger node, or exit with guidance."""
+    if node_opt:
+        ids = {n.get("id") for n in (wf.get("nodes") or [])}
+        if node_opt not in ids:
+            typer.echo(f"✗ Node '{node_opt}' not found in workflow '{wf.get('name')}'.")
+            raise typer.Exit(code=1)
+        return node_opt
+    nodes = resources.find_trigger_nodes(wf, dtype)
+    if not nodes:
+        typer.echo(f"✗ Workflow '{wf.get('name')}' has no {dtype} trigger node.")
+        typer.echo(f"  Add a trigger node with data.type '{dtype}' (see: sagex syntax trigger), or pass --node <id>.")
+        raise typer.Exit(code=1)
+    if len(nodes) > 1:
+        typer.echo(f"Workflow '{wf.get('name')}' has multiple {dtype} trigger nodes — pass --node <id>:")
+        for n in nodes:
+            typer.echo(f"  {n.get('id')}  {(n.get('data') or {}).get('label') or ''}")
+        raise typer.Exit(code=1)
+    return nodes[0].get("id")
+
+
+@trigger_app.command("create")
+def trigger_create_cmd(
+    workflow: str = typer.Argument(..., help="Workflow name or id."),
+    type_: str = typer.Option(..., "--type", "-t", help="Trigger type: http or schedule."),
+    cron: str = typer.Option(None, "--cron", help="Cron expression (5 fields, UTC) — required for schedule."),
+    node: str = typer.Option(None, "--node", help="Trigger node id (auto-detected if the workflow has exactly one)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the secret-rotation confirmation (http)."),
+) -> None:
+    """Create or update a workflow trigger. HTTP prints its secret once + how to call it."""
+    ttype = type_.lower()
+    if ttype not in ("http", "schedule"):
+        typer.echo("✗ --type must be 'http' or 'schedule'.")
+        raise typer.Exit(code=1)
+    if ttype == "schedule":
+        if not cron:
+            typer.echo("✗ A schedule trigger needs --cron \"<min> <hour> <day-of-month> <month> <day-of-week>\".")
+            raise typer.Exit(code=1)
+        if len(cron.split()) != 5:
+            typer.echo("✗ --cron must have exactly 5 whitespace-separated fields.")
+            raise typer.Exit(code=1)
+    elif cron:
+        typer.echo("✗ --cron only applies to a schedule trigger.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+    wf = _resolve_or_exit(resources.resolve_workflow, client, workflow, "workflow")
+    node_id = _pick_trigger_node(wf, ttype, node)
+
+    if ttype == "http":
+        exists = False
+        try:
+            resources.get_http_trigger(client, wf["id"], node_id)
+            exists = True
+        except ApiError as exc:
+            if exc.status != 404:
+                typer.echo(f"✗ {exc.message}")
+                raise typer.Exit(code=1)
+        if exists and not yes:
+            typer.echo("⚠ An HTTP trigger already exists for this node.")
+            typer.echo("  Recreating ROTATES the secret and invalidates the current one.")
+            if not typer.confirm("  Rotate it now?"):
+                typer.echo("Aborted — trigger unchanged.")
+                raise typer.Exit(code=1)
+        try:
+            data = resources.create_http_trigger(client, wf["id"], node_id)
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}")
+            raise typer.Exit(code=1)
+        render.http_trigger_result(data)
+    else:
+        try:
+            data = resources.upsert_schedule_trigger(client, wf["id"], node_id, cron)
+        except ApiError as exc:
+            typer.echo(f"✗ {exc.message}")
+            raise typer.Exit(code=1)
+        render.schedule_trigger_result(data)
+
+
+@trigger_app.command("regenerate")
+def trigger_regenerate_cmd(
+    workflow: str = typer.Argument(..., help="Workflow name or id."),
+    node: str = typer.Option(None, "--node", help="Trigger node id (auto-detected if one)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Rotate an HTTP trigger's secret (same URL). The current secret stops working."""
+    client = _client_or_exit()
+    wf = _resolve_or_exit(resources.resolve_workflow, client, workflow, "workflow")
+    node_id = _pick_trigger_node(wf, "http", node)
+    if not yes and not typer.confirm("Rotate the secret? The current one will stop working."):
+        typer.echo("Aborted — secret unchanged.")
+        raise typer.Exit(code=1)
+    try:
+        data = resources.regenerate_http_trigger(client, wf["id"], node_id)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    render.http_trigger_result(data)
+
+
+def _set_trigger_active(ref: str, active: bool) -> None:
+    """Enable/disable an existing trigger via the global PATCH (keyed by its uuid)."""
+    client = _client_or_exit()
+    kind, t = _resolve_or_exit(resources.resolve_trigger, client, ref, "trigger")
+    try:
+        resources.set_trigger_active(client, kind, t.get("id"), active)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ {'Enabled' if active else 'Disabled'} {kind} trigger for '{t.get('workflow_name')}'")
+
+
+@trigger_app.command("enable")
+def trigger_enable_cmd(
+    ref: str = typer.Argument(..., help="Workflow name, or trigger id."),
+) -> None:
+    """Enable a trigger (is_active = true)."""
+    _set_trigger_active(ref, True)
+
+
+@trigger_app.command("disable")
+def trigger_disable_cmd(
+    ref: str = typer.Argument(..., help="Workflow name, or trigger id."),
+) -> None:
+    """Disable a trigger without deleting it (is_active = false)."""
+    _set_trigger_active(ref, False)
+
+
+@trigger_app.command("invoke")
+def trigger_invoke_cmd(
+    ref: str = typer.Argument(..., help="Workflow name, or trigger id."),
+) -> None:
+    """Show how to call an HTTP trigger (URL, headers, body, curl). Secret is not shown."""
+    client = _client_or_exit()
+    kind, t = _resolve_or_exit(resources.resolve_trigger, client, ref, "trigger")
+    if kind != "http":
+        typer.echo("✗ Only HTTP triggers are called via URL — this is a schedule trigger.")
+        raise typer.Exit(code=1)
+    render.http_trigger_invocation(t)
 
 
 @push_app.command("workflow")

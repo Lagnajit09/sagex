@@ -275,6 +275,58 @@ def resolve_trigger(client: ApiClient, ref: str) -> tuple[str, dict]:
     return kind, {**t, **detail}                        # detail wins; keeps workflow_name
 
 
+# ---------------------------------------------------------------------------
+# Trigger writes. Triggers bind to a workflow's trigger NODE by node id; HTTP
+# create/regenerate return the plaintext secret ONCE. Enable/disable is a global
+# PATCH keyed by the trigger's UUID (not by node).
+# ---------------------------------------------------------------------------
+
+
+def find_trigger_nodes(workflow: dict, dtype: str) -> list[dict]:
+    """Trigger nodes (outer type 'trigger') whose data.type == dtype ('http'/'schedule')."""
+    out = []
+    for n in workflow.get("nodes") or []:
+        if n.get("type") == "trigger":
+            data = n.get("data") if isinstance(n.get("data"), dict) else {}
+            if data.get("type") == dtype:
+                out.append(n)
+    return out
+
+
+def create_http_trigger(client: ApiClient, workflow_id, node_id: str) -> dict:
+    """Create-or-ROTATE an HTTP trigger for a node. Returns data incl. the plaintext
+    `secret` (shown once) and `trigger_url`. Re-running invalidates the old secret."""
+    return client.post(f"/api/workflows/{workflow_id}/triggers/http/", json={"node_id": node_id})
+
+
+def get_http_trigger(client: ApiClient, workflow_id, node_id: str) -> dict:
+    """Fetch an HTTP trigger's detail (no secret, only secret_last4). 404 if none."""
+    return client.get(f"/api/workflows/{workflow_id}/triggers/http/{node_id}/")
+
+
+def regenerate_http_trigger(client: ApiClient, workflow_id, node_id: str) -> dict:
+    """Rotate an HTTP trigger's secret (same URL). Returns the new plaintext `secret` once."""
+    return client.post(f"/api/workflows/{workflow_id}/triggers/http/{node_id}/regenerate/")
+
+
+def upsert_schedule_trigger(client: ApiClient, workflow_id, node_id: str, cron: str) -> dict:
+    """Create-or-update a schedule trigger (5-field cron, UTC). Returns its record."""
+    return client.post(
+        f"/api/workflows/{workflow_id}/triggers/schedule/",
+        json={"node_id": node_id, "cron_expression": cron},
+    )
+
+
+def set_trigger_active(client: ApiClient, kind: str, trigger_id, is_active: bool) -> dict:
+    """Enable/disable a trigger via the global endpoint. `kind` is 'http' or 'schedule'."""
+    return client.patch(f"/api/triggers/{kind}/{trigger_id}/", json={"is_active": is_active})
+
+
+def delete_trigger(client: ApiClient, workflow_id, kind: str, node_id: str) -> None:
+    """Delete a trigger by its workflow + node. `kind` is 'http' or 'schedule'."""
+    client.delete(f"/api/workflows/{workflow_id}/triggers/{kind}/{node_id}/")
+
+
 def _vault_name(client: ApiClient, vault_id) -> str | None:
     """Look up a vault's display name from its id (best-effort; None on failure).
 

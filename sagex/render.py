@@ -397,6 +397,9 @@ def trigger(kind: str, t: dict) -> None:
             header.append("\n"); header.append(_kv("rotated", t.get("rotated_at")))
     else:
         header.append("\n"); header.append(_kv("cron", t.get("cron_expression")))
+        desc = describe_cron(t.get("cron_expression"))
+        if desc:
+            header.append("\n"); header.append(_kv("when", f"{desc} (UTC)"))
         header.append("\n"); header.append(_kv("timezone", t.get("timezone")))
         if t.get("last_run_id"):
             header.append("\n"); header.append(_kv("last run", t.get("last_run_id")))
@@ -406,6 +409,84 @@ def trigger(kind: str, t: dict) -> None:
             header.append(err)
 
     console.print(Panel(header, title=t.get("workflow_name") or "(trigger)", title_align="left"))
+
+
+# --- trigger writes (create / regenerate / invoke) -------------------------
+
+def _http_invocation(url: str, secret_display: str) -> None:
+    """Print a copy-paste 'how to call this HTTP trigger' cheat-sheet."""
+    body = '{"inputs": {}}'
+    block = Text()
+    block.append("POST ", style="bold"); block.append(str(url)); block.append("\n")
+    block.append("Headers:\n", style="bright_black")
+    block.append("  X-Trigger-Secret: ", style="bright_black"); block.append(secret_display); block.append("\n")
+    block.append("  Idempotency-Key:  ", style="bright_black"); block.append("<unique per request — required>"); block.append("\n")
+    block.append("  Content-Type:     ", style="bright_black"); block.append("application/json"); block.append("\n")
+    block.append("Body:\n", style="bright_black")
+    block.append(f"  {body}")
+    console.print(Panel(block, title="Call this HTTP trigger", title_align="left", border_style="cyan"))
+
+    curl = (
+        f'curl -X POST "{url}" \\\n'
+        f'  -H "X-Trigger-Secret: {secret_display}" \\\n'
+        f'  -H "Idempotency-Key: $(uuidgen)" \\\n'
+        f'  -H "Content-Type: application/json" \\\n'
+        f'  -d \'{body}\''
+    )
+    # soft_wrap so long URLs aren't hard-broken mid-token — keeps the curl copy-pasteable.
+    console.print(Text(curl, style="bright_black"), soft_wrap=True)
+    note("Response 202 → { workflow_run_id, status, polling_url }")
+
+
+def http_trigger_result(data: dict) -> None:
+    """After create/regenerate: show the plaintext secret ONCE + the invocation cheat-sheet."""
+    secret = data.get("secret")
+    console.print(Text("✓ HTTP trigger ready.", style="green"))
+    if secret:
+        console.print(Text("Secret — shown once, copy it now (it can't be retrieved again):", style="bold red"))
+        console.print(Text(f"  {secret}", style="bold"))
+    _http_invocation(data.get("trigger_url"), secret or f"<your secret, ends ••••{data.get('secret_last4')}>")
+
+
+def http_trigger_invocation(data: dict) -> None:
+    """Reprint how to call an existing HTTP trigger (secret not shown — only last4)."""
+    if not data.get("is_active", True):
+        note("This trigger is disabled — enable it before calling:  sagex trigger enable …")
+    _http_invocation(data.get("trigger_url"), f"<your secret, ends ••••{data.get('secret_last4')}>")
+    note("The secret is stored hashed and can't be shown. Lost it? Run:  sagex trigger regenerate …")
+
+
+def describe_cron(expr: str) -> str | None:
+    """Human-readable description of a cron expression (e.g. 'At 09:00, on day 1 …').
+
+    Best-effort: returns None if the expression is empty, unparseable, or the
+    cron_descriptor library isn't available — callers just omit the line.
+    """
+    if not expr:
+        return None
+    try:
+        from cron_descriptor import get_description
+        return get_description(expr)
+    except Exception:
+        return None
+
+
+def schedule_trigger_result(data: dict) -> None:
+    """Summary after creating/updating a schedule trigger."""
+    console.print(Text("✓ Schedule trigger ready.", style="green"))
+    body = Text()
+    body.append(_kv("node", data.get("node_id")));            body.append("\n")
+    body.append(_kv("cron", data.get("cron_expression")));    body.append("\n")
+    desc = describe_cron(data.get("cron_expression"))
+    if desc:
+        body.append(_kv("when", f"{desc} (UTC)"));            body.append("\n")
+    body.append(_kv("timezone", data.get("timezone")));       body.append("\n")
+    active = data.get("is_active")
+    st = Text(); st.append("active: ", style="bright_black")
+    st.append("● yes", style="green") if active else st.append("○ no", style="bright_black")
+    body.append(st)
+    console.print(body)
+    note("Cron is 5 fields (min hour day-of-month month day-of-week), evaluated in UTC.")
 
 
 # --- credential (key) ------------------------------------------------------

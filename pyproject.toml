@@ -28,6 +28,7 @@ dependencies = [
     "httpx==0.28.1",
     "keyring==25.7.0",
     "typer==0.27.2",
+    "cron-descriptor==2.1.0",
 ]
 
 [project.optional-dependencies]
