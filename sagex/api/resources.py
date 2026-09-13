@@ -465,6 +465,33 @@ def update_vault(client: ApiClient, vault_id, payload: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Delete helpers. All are owner-scoped server-side (404 if not yours). Deleting a
+# vault CASCADES to its servers and credentials.
+# ---------------------------------------------------------------------------
+
+
+def delete_workflow(client: ApiClient, workflow_id) -> None:
+    client.delete(f"/api/workflows/{workflow_id}/")
+
+
+def delete_script(client: ApiClient, script_id) -> None:
+    client.delete(f"/api/scripts/{script_id}/")
+
+
+def delete_vault(client: ApiClient, vault_id) -> None:
+    """Delete a vault — CASCADES to every server and credential inside it."""
+    client.delete(f"/api/vault/vaults/{vault_id}/")
+
+
+def delete_server(client: ApiClient, server_id) -> None:
+    client.delete(f"/api/vault/servers/{server_id}/")
+
+
+def delete_credential(client: ApiClient, credential_id) -> None:
+    client.delete(f"/api/vault/credentials/{credential_id}/")
+
+
+# ---------------------------------------------------------------------------
 # Full-list helpers for the `sagex list` commands.
 # ---------------------------------------------------------------------------
 

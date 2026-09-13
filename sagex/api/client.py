@@ -42,6 +42,10 @@ class ApiClient:
         """PUT `json` to `path` (full update) and return the envelope's `data`."""
         return self._request("PUT", path, json=json)
 
+    def delete(self, path: str):
+        """DELETE `path` and return the envelope's `data` (usually None on success)."""
+        return self._request("DELETE", path)
+
     # --- internals -----------------------------------------------------------
 
     def _headers(self) -> dict:

@@ -64,6 +64,9 @@ app.add_typer(create_app, name="create")
 update_app = typer.Typer(help="Update server-side resources (vaults, servers, keys).")
 app.add_typer(update_app, name="update")
 
+delete_app = typer.Typer(help="Delete server-side resources (asks for confirmation).")
+app.add_typer(delete_app, name="delete")
+
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
 
@@ -1265,6 +1268,143 @@ def update_key_cmd(
         typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
     typer.echo(f"✓ Updated key '{updated.get('name')}' (id {updated.get('id')})")
+
+
+# ---------------------------------------------------------------------------
+# Delete commands. Resolution reuses the resolve_* helpers, so an ambiguous name
+# prints the matching records (with ids) and aborts. Deletes are irreversible.
+# ---------------------------------------------------------------------------
+
+
+def _confirm_delete_or_abort(kind: str, name, ident, yes: bool) -> None:
+    """Standard delete confirmation (skipped when --yes). Aborts via typer.Exit."""
+    if yes:
+        return
+    typer.echo(f"About to delete {kind} '{name}' (id {ident}). This cannot be undone.")
+    if not typer.confirm("  Delete it?"):
+        typer.echo("Aborted — nothing deleted.")
+        raise typer.Exit(code=1)
+
+
+@delete_app.command("workflow")
+def delete_workflow_cmd(
+    ref: str = typer.Argument(..., help="Workflow name or id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete a workflow."""
+    client = _client_or_exit()
+    wf = _resolve_or_exit(resources.resolve_workflow, client, ref, "workflow")
+    _confirm_delete_or_abort("workflow", wf.get("name"), wf.get("id"), yes)
+    try:
+        resources.delete_workflow(client, wf["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted workflow '{wf.get('name')}' (id {wf.get('id')})")
+
+
+@delete_app.command("script")
+def delete_script_cmd(
+    ref: str = typer.Argument(..., help="Script name or id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete a script."""
+    client = _client_or_exit()
+    meta = _resolve_or_exit(resources.resolve_script, client, ref, "script")
+    _confirm_delete_or_abort("script", meta.get("name"), meta.get("id"), yes)
+    try:
+        resources.delete_script(client, meta["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted script '{meta.get('name')}' (id {meta.get('id')})")
+
+
+@delete_app.command("vault")
+def delete_vault_cmd(
+    ref: str = typer.Argument(..., help="Vault name or id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation (and the cascade name check)."),
+) -> None:
+    """Delete a vault. This CASCADES — every server and credential inside it is deleted too."""
+    client = _client_or_exit()
+    v = _resolve_or_exit(resources.resolve_vault, client, ref, "vault")
+    name = v.get("name")
+    servers = v.get("servers") or []
+    creds = v.get("credentials") or []
+
+    if not yes:
+        typer.echo(f"⚠ Deleting vault '{name}' (id {v.get('id')}) will ALSO delete everything inside it:")
+        typer.echo(f"    {len(servers)} server(s) and {len(creds)} credential(s).")
+        typer.echo("  This cannot be undone.")
+        typed = typer.prompt("  Type the vault name to confirm")
+        if typed.strip() != name:
+            typer.echo("Name did not match — aborted.")
+            raise typer.Exit(code=1)
+
+    try:
+        resources.delete_vault(client, v["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted vault '{name}' (and {len(servers)} server(s), {len(creds)} credential(s))")
+
+
+@delete_app.command("server")
+def delete_server_cmd(
+    ref: str = typer.Argument(..., help="Server name or id."),
+    vault: str = typer.Option(None, "--vault", help="Scope the lookup to this vault (name or id) — for a name shared across vaults."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete a vault server."""
+    client = _client_or_exit()
+    if vault:
+        vd = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+        server = resources.find_server_in_vault(vd, ref)
+        if not server:
+            typer.echo(f"✗ No server '{ref}' in vault '{vd.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        server = _resolve_or_exit(resources.resolve_server, client, ref, "server")
+
+    _confirm_delete_or_abort("server", server.get("name"), server.get("id"), yes)
+    try:
+        resources.delete_server(client, server["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted server '{server.get('name')}' (id {server.get('id')})")
+
+
+@delete_app.command("key")
+def delete_key_cmd(
+    ref: str = typer.Argument(..., help="Credential (key) name or id."),
+    vault: str = typer.Option(None, "--vault", help="Scope the lookup to this vault (name or id) — for a name shared across vaults."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete a vault credential (key)."""
+    client = _client_or_exit()
+    if vault:
+        vd = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+        cred = resources.find_credential_in_vault(vd, ref)
+        if not cred:
+            typer.echo(f"✗ No key '{ref}' in vault '{vd.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        cred = _resolve_or_exit(resources.resolve_credential, client, ref, "key")
+
+    if not yes:
+        typer.echo(f"About to delete key '{cred.get('name')}' (id {cred.get('id')}). This cannot be undone.")
+        typer.echo("  Any server using this key will have its credential unset.")
+        if not typer.confirm("  Delete it?"):
+            typer.echo("Aborted — nothing deleted.")
+            raise typer.Exit(code=1)
+
+    try:
+        resources.delete_credential(client, cred["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted key '{cred.get('name')}' (id {cred.get('id')})")
 
 
 @push_app.command("workflow")
