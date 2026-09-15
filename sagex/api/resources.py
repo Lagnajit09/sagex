@@ -148,6 +148,11 @@ def update_workflow(client: ApiClient, workflow_id, payload: dict) -> dict:
     return client.put(f"/api/workflows/{workflow_id}/", json=payload)
 
 
+def rename_workflow(client: ApiClient, workflow_id, new_name: str) -> dict:
+    """Rename a workflow via a partial PATCH (leaves nodes/edges untouched)."""
+    return client.patch(f"/api/workflows/{workflow_id}/", json={"name": new_name})
+
+
 def resolve_script(client: ApiClient, ref: str) -> dict:
     """Resolve a script name-or-id and return its metadata record (no code body).
 
@@ -170,6 +175,12 @@ def resolve_script(client: ApiClient, ref: str) -> dict:
 def get_script_content(client: ApiClient, script_id) -> dict:
     """Fetch a script's raw code: {id, name, content, content_type, version}."""
     return client.get(f"/api/scripts/{script_id}/content/")
+
+
+def rename_script(client: ApiClient, script_id, new_name: str) -> dict:
+    """Rename a script via its dedicated endpoint. `new_name` is the bare stem (no
+    extension — the server keeps the original one). Returns the updated record."""
+    return client.post(f"/api/scripts/{script_id}/rename/", json={"new_name": new_name})
 
 
 def find_script_by_name(client: ApiClient, name: str) -> dict | None:

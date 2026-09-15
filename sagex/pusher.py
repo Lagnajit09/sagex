@@ -47,6 +47,11 @@ _LANGUAGE_EXT = {
 # The server's script-name rule (letters, numbers, _ and - only — no dots/spaces).
 _SCRIPT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+
+def is_valid_script_name(name: str) -> bool:
+    """True if `name` is a legal script name (letters/numbers/_/-, no extension/dot)."""
+    return bool(_SCRIPT_NAME_RE.match(name or ""))
+
 # Comment syntax per language, for the `new script` scaffold header.
 _LINE_COMMENT = {
     "python": "#", "shell": "#", "bash": "#", "ruby": "#", "yaml": "#", "powershell": "#",

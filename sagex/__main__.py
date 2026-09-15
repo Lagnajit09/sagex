@@ -70,6 +70,9 @@ app.add_typer(delete_app, name="delete")
 trigger_app = typer.Typer(help="Configure workflow triggers (HTTP webhooks and schedules).")
 app.add_typer(trigger_app, name="trigger")
 
+rename_app = typer.Typer(help="Rename a resource (workflow, script, vault, server, key).")
+app.add_typer(rename_app, name="rename")
+
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
 
@@ -1572,6 +1575,129 @@ def trigger_invoke_cmd(
         typer.echo("✗ Only HTTP triggers are called via URL — this is a schedule trigger.")
         raise typer.Exit(code=1)
     render.http_trigger_invocation(t)
+
+
+# ---------------------------------------------------------------------------
+# Rename commands. Low-risk and reversible, so they run without a confirmation
+# prompt (they're meant to double as Autobot tools). Name-uniqueness is guarded
+# where the server enforces it (vault per-owner; server/key per-vault).
+# ---------------------------------------------------------------------------
+
+
+@rename_app.command("workflow")
+def rename_workflow_cmd(
+    ref: str = typer.Argument(..., help="Workflow name or id."),
+    new_name: str = typer.Argument(..., help="New workflow name."),
+) -> None:
+    """Rename a workflow (leaves its nodes and edges untouched)."""
+    client = _client_or_exit()
+    wf = _resolve_or_exit(resources.resolve_workflow, client, ref, "workflow")
+    try:
+        updated = resources.rename_workflow(client, wf["id"], new_name)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Renamed workflow to '{updated.get('name') or new_name}' (id {wf.get('id')})")
+
+
+@rename_app.command("script")
+def rename_script_cmd(
+    ref: str = typer.Argument(..., help="Script name or id."),
+    new_name: str = typer.Argument(..., help="New script name (no extension — it's kept automatically)."),
+) -> None:
+    """Rename a script. Give the bare name; the file extension is preserved."""
+    if not pusher.is_valid_script_name(new_name):
+        typer.echo("✗ A script name can only contain letters, numbers, '_' and '-' "
+                   "(no extension or dot — the extension is kept automatically).")
+        raise typer.Exit(code=1)
+    client = _client_or_exit()
+    meta = _resolve_or_exit(resources.resolve_script, client, ref, "script")
+    try:
+        updated = resources.rename_script(client, meta["id"], new_name)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Renamed script to '{updated.get('name') or new_name}' (id {meta.get('id')})")
+
+
+@rename_app.command("vault")
+def rename_vault_cmd(
+    ref: str = typer.Argument(..., help="Vault name or id."),
+    new_name: str = typer.Argument(..., help="New vault name (unique among your vaults)."),
+) -> None:
+    """Rename a vault."""
+    client = _client_or_exit()
+    v = _resolve_or_exit(resources.resolve_vault, client, ref, "vault")
+    clash = resources.find_vault_by_name(client, new_name)
+    if clash and str(clash.get("id")) != str(v.get("id")):
+        typer.echo(f"✗ You already have another vault named '{new_name}' (id {clash.get('id')}).")
+        raise typer.Exit(code=1)
+    try:
+        updated = resources.update_vault(client, v["id"], {"name": new_name})
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Renamed vault to '{updated.get('name') or new_name}' (id {v.get('id')})")
+
+
+@rename_app.command("server")
+def rename_server_cmd(
+    ref: str = typer.Argument(..., help="Server name or id."),
+    new_name: str = typer.Argument(..., help="New server name (unique within its vault)."),
+    vault: str = typer.Option(None, "--vault", help="Scope the lookup to this vault — for a name shared across vaults."),
+) -> None:
+    """Rename a vault server."""
+    client = _client_or_exit()
+    if vault:
+        vd = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+        server = resources.find_server_in_vault(vd, ref)
+        if not server:
+            typer.echo(f"✗ No server '{ref}' in vault '{vd.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        server = _resolve_or_exit(resources.resolve_server, client, ref, "server")
+        vd = _resolve_or_exit(resources.resolve_vault, client, server.get("vault"), "vault")
+
+    clash = resources.find_server_in_vault(vd, new_name)
+    if clash and str(clash.get("id")) != str(server.get("id")):
+        typer.echo(f"✗ Vault '{vd.get('name')}' already has another server named '{new_name}'.")
+        raise typer.Exit(code=1)
+    try:
+        updated = resources.update_server(client, server["id"], {"name": new_name})
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Renamed server to '{updated.get('name') or new_name}' (id {server.get('id')})")
+
+
+@rename_app.command("key")
+def rename_key_cmd(
+    ref: str = typer.Argument(..., help="Credential (key) name or id."),
+    new_name: str = typer.Argument(..., help="New key name (unique within its vault)."),
+    vault: str = typer.Option(None, "--vault", help="Scope the lookup to this vault — for a name shared across vaults."),
+) -> None:
+    """Rename a vault credential (key)."""
+    client = _client_or_exit()
+    if vault:
+        vd = _resolve_or_exit(resources.resolve_vault, client, vault, "vault")
+        cred = resources.find_credential_in_vault(vd, ref)
+        if not cred:
+            typer.echo(f"✗ No key '{ref}' in vault '{vd.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        cred = _resolve_or_exit(resources.resolve_credential, client, ref, "key")
+        vd = _resolve_or_exit(resources.resolve_vault, client, cred.get("vault"), "vault")
+
+    clash = resources.find_credential_in_vault(vd, new_name)
+    if clash and str(clash.get("id")) != str(cred.get("id")):
+        typer.echo(f"✗ Vault '{vd.get('name')}' already has another key named '{new_name}'.")
+        raise typer.Exit(code=1)
+    try:
+        updated = resources.update_credential(client, cred["id"], {"name": new_name})
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Renamed key to '{updated.get('name') or new_name}' (id {cred.get('id')})")
 
 
 @push_app.command("workflow")
