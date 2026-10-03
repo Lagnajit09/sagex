@@ -11,6 +11,7 @@ otherwise the matching `auth` command runs as a plain CLI action.
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -24,7 +25,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from sagex import __version__, config, copier, pusher, render
+from sagex import __version__, config, copier, pusher, render, runner
 from sagex.api import ApiError, build_client, resources
 from sagex.api import store
 from sagex.app import SagexApp
@@ -72,6 +73,9 @@ app.add_typer(trigger_app, name="trigger")
 
 rename_app = typer.Typer(help="Rename a resource (workflow, script, vault, server, key).")
 app.add_typer(rename_app, name="rename")
+
+run_app = typer.Typer(help="Run a script on a server and watch its output live.")
+app.add_typer(run_app, name="run")
 
 # Lightweight authenticated endpoint used to verify a key.
 _VERIFY_PATH = "/api/users/profile/"
@@ -1856,6 +1860,213 @@ def push_script_cmd(
         typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
     typer.echo(f"✓ Created '{created.get('name')}' (id {created.get('id')})")
+
+
+# ---------------------------------------------------------------------------
+# Run commands. A script run streams live from the server. Ctrl+C asks the server
+# to stop it while the stream stays open to report the final status; a second
+# Ctrl+C detaches. Secret inputs are only ever typed at a hidden prompt.
+# ---------------------------------------------------------------------------
+
+
+def _run_target(client, server_ref: str, vault_ref: str | None, key_ref: str | None):
+    """Resolve the server (optionally scoped to a vault) and the key to run with:
+    --key from the server's vault, else the server's attached key.
+    Returns (server, credential, vault_name)."""
+    vault_detail = None
+    if vault_ref:
+        vault_detail = _resolve_or_exit(resources.resolve_vault, client, vault_ref, "vault")
+        server = resources.find_server_in_vault(vault_detail, server_ref)
+        if not server:
+            typer.echo(f"✗ No server '{server_ref}' in vault '{vault_detail.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        server = _resolve_or_exit(resources.resolve_server, client, server_ref, "server")
+
+    if key_ref:
+        if vault_detail is None:
+            vault_detail = _resolve_or_exit(resources.resolve_vault, client, server.get("vault"), "vault")
+        cred = resources.find_credential_in_vault(vault_detail, key_ref)
+        if not cred:
+            typer.echo(f"✗ No key '{key_ref}' in the server's vault '{vault_detail.get('name')}'.")
+            typer.echo(f"  A server's key must live in the same vault. See:  sagex show vault \"{vault_detail.get('name')}\"")
+            raise typer.Exit(code=1)
+    elif server.get("credential"):
+        cred = server.get("credential_details") or {"id": server.get("credential")}
+    else:
+        typer.echo(f"✗ Server '{server.get('name')}' has no key attached.")
+        typer.echo(f"  Pass --key <name>, or attach one:  sagex update server \"{server.get('name')}\" --key <name>")
+        raise typer.Exit(code=1)
+
+    vault_name = (vault_detail or {}).get("name") or server.get("vault_name")
+    return server, cred, vault_name
+
+
+def _prompt_input(spec: dict) -> str:
+    """Ask for one script input until it fits its type (hidden for secrets).
+    Prompts go to stderr so redirected stdout holds only the script's output."""
+    if spec["description"]:
+        render.run_note(f"  {spec['name']}: {spec['description']}")
+    suffix = " (secret)" if spec["secret"] else (f" ({spec['type']})" if spec["type"] != "string" else "")
+    while True:
+        value = typer.prompt(f"{spec['name']}{suffix}", hide_input=spec["secret"],
+                             default="", show_default=False, err=True)
+        problem = runner.check_value(spec["type"], value)
+        if not problem:
+            return value
+        typer.echo(f"  ✗ {problem}", err=True)
+
+
+def _collect_inputs(specs: list[dict], raw: list[str]) -> dict:
+    """A value for every script input: --param, else the saved default, else a
+    prompt. Secrets are refused as flags (shell history) and always prompted for."""
+    by_name = {s["name"].lower(): s for s in specs}
+    given: dict[str, str] = {}
+    for item in raw:
+        name, sep, value = item.partition("=")
+        name = name.strip()
+        if not sep or not name:
+            typer.echo(f"✗ --param must look like NAME=VALUE (got '{item}').")
+            raise typer.Exit(code=1)
+        spec = by_name.get(name.lower())
+        if spec is None:
+            known = ", ".join(s["name"] for s in specs) or "none"
+            typer.echo(f"✗ '{name}' isn't an input of this script. Its {{{{NAME}}}} inputs: {known}.")
+            raise typer.Exit(code=1)
+        if spec["secret"]:
+            typer.echo(f"✗ '{spec['name']}' is a secret — leave it off the command line; you'll be asked for it (hidden).")
+            raise typer.Exit(code=1)
+        problem = runner.check_value(spec["type"], value)
+        if problem:
+            typer.echo(f"✗ --param {spec['name']}: {problem} (got '{value}').")
+            raise typer.Exit(code=1)
+        given[spec["name"]] = value
+
+    interactive = sys.stdin.isatty()
+    inputs: dict[str, str] = {}
+    for spec in specs:
+        name = spec["name"]
+        if name in given:
+            inputs[name] = given[name]
+        elif spec["default"]:
+            inputs[name] = spec["default"]
+        elif interactive:
+            inputs[name] = _prompt_input(spec)
+        elif spec["secret"]:
+            typer.echo(f"✗ '{name}' is a secret and can only be typed at a hidden prompt — run this in a terminal.")
+            raise typer.Exit(code=1)
+        else:
+            typer.echo(f"✗ No value for '{name}'. Pass --param {name}=VALUE.")
+            raise typer.Exit(code=1)
+    return inputs
+
+
+def _show_run_frame(frame, state: dict) -> bool:
+    """Print one live-run frame and track its status; False once the run is done."""
+    event, data = frame
+    if not isinstance(data, dict):
+        data = {"data": data}
+    if event == "stdout":
+        render.run_stdout(str(data.get("data", "")))
+    elif event == "stderr":
+        render.run_stderr(str(data.get("data", "")))
+    elif event == "status":
+        state["execution_id"] = data.get("execution_id") or state["execution_id"]
+        state["status"] = data.get("status") or state["status"]
+    elif event == "exit_code":
+        state["exit_code"] = data.get("exit_code")
+    elif event == "error":
+        render.run_stderr(str(data.get("message") or data.get("data") or "Run failed."))
+    elif event == "done":
+        return False
+    else:                                   # 'log' and anything newer: worker info lines
+        render.run_note(str(data.get("data", "")))
+    return True
+
+
+def _follow_script_run(client, payload: dict) -> int:
+    """Stream a script run to the terminal; return the exit code for the CLI."""
+    stream = runner.BackgroundStream(resources.run_script_stream(client, payload))
+    state = {"execution_id": None, "status": None, "exit_code": None}
+    stopping = False
+    started = time.monotonic()
+    while True:
+        try:
+            frame = stream.get()
+            if frame is None or not _show_run_frame(frame, state):
+                break
+        except KeyboardInterrupt:
+            execution_id = state["execution_id"]
+            if stopping or not execution_id:
+                hint = f" (execution {execution_id})" if execution_id else ""
+                render.run_note(f"Detached — the run may still be going{hint}.")
+                return 130
+            stopping = True
+            render.run_note("Stopping the run… press Ctrl+C again to detach.")
+            try:
+                resources.stop_script_execution(client, execution_id)
+            except ApiError as exc:
+                render.run_note(f"Couldn't stop it: {exc.message}")
+        except ApiError as exc:
+            render.run_stderr(f"✗ {exc.message}")
+            return 1
+
+    status, exit_code = state["status"], state["exit_code"]
+    render.run_summary(status, exit_code, time.monotonic() - started, state["execution_id"])
+    if status == "completed":
+        return 0
+    if status == "cancelled":
+        return 130
+    return exit_code if isinstance(exit_code, int) and exit_code > 0 else 1
+
+
+@run_app.command("script")
+def run_script_cmd(
+    ref: str = typer.Argument(..., help="Script name or id."),
+    server_ref: str = typer.Option(..., "--server", "-s", help="Server (name or id) to run it on."),
+    key: str = typer.Option(None, "--key", "-k", help="Key (name or id) from the server's vault. Defaults to the server's attached key."),
+    vault: str = typer.Option(None, "--vault", help="Scope the server lookup to this vault (name or id) — for a server name shared across vaults."),
+    params: list[str] = typer.Option(None, "--param", "-p", help="A script input as NAME=VALUE (repeatable). Secrets are asked for at a hidden prompt instead."),
+) -> None:
+    """Run a script on a server and stream its output live.
+
+    The script's inputs are its {{NAME}} markers. Each value comes from --param, else the script's saved default, else a prompt. Ctrl+C stops the run (press it again to detach). Exits with the script's exit code.
+    """
+    client = _client_or_exit()
+    script = _resolve_or_exit(resources.resolve_script, client, ref, "script")
+    server, cred, vault_name = _run_target(client, server_ref, vault, key)
+    try:
+        content = (resources.get_script_content(client, script["id"]) or {}).get("content") or ""
+    except ApiError as exc:
+        typer.echo(f"✗ Couldn't read the script: {exc.message}")
+        raise typer.Exit(code=1)
+
+    specs = runner.script_params(content, script.get("parameters"))
+    inputs = _collect_inputs(specs, params or [])
+
+    render.run_header(
+        script.get("name") or ref,
+        server.get("name") or server_ref,
+        [server.get("host"),
+         vault_name and f"vault {vault_name}",
+         cred.get("name") and f"key {cred.get('name')}"],
+        inputs,
+        {s["name"] for s in specs if s["secret"]},
+    )
+    payload = {
+        "script_details": {
+            "script_id": int(script["id"]),
+            "script_name": script.get("name") or "",
+            "pathname": script.get("pathname") or "",
+        },
+        "vault_details": {
+            "vault_id": str(server.get("vault")),
+            "server_id": str(server.get("id")),
+            "credential_id": str(cred.get("id")),
+        },
+        "inputs": inputs,
+    }
+    raise typer.Exit(code=_follow_script_run(client, payload))
 
 
 def _check(raise_on_fail: bool) -> None:

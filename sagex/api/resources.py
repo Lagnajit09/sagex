@@ -207,6 +207,21 @@ def update_script(client: ApiClient, script_id, content: str) -> dict:
     return client.post(f"/api/scripts/{script_id}/update/", json={"content": content})
 
 
+def run_script_stream(client: ApiClient, payload: dict):
+    """Start a one-shot script run; yields its live (event, data) SSE frames.
+
+    Payload: {script_details: {script_id, script_name, pathname},
+              vault_details: {vault_id, server_id, credential_id}, inputs: {NAME: value}}.
+    The server applies no stored defaults, so `inputs` must carry every variable.
+    """
+    return client.stream("POST", "/api/execution-engine/run/", json=payload)
+
+
+def stop_script_execution(client: ApiClient, execution_id) -> None:
+    """Signal a script execution to terminate (only valid while it is 'running')."""
+    client.post(f"/api/execution-engine/{execution_id}/stop/")
+
+
 def resolve_run(client: ApiClient, ref: str) -> dict:
     """Resolve a run by full id, or by an id PREFIX (runs have no names).
 

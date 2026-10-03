@@ -32,6 +32,7 @@ def relative_time(iso: str | None) -> str:
 # --- Run status -> (icon, color). One place to change how a status looks. ---
 STATUS_ICON = {
     "success":   ("✓", "green"),
+    "completed": ("✓", "green"),            # script executions finish as 'completed'
     "failed":    ("✗", "red"),
     "running":   ("⟳", "yellow"),
     "queued":    ("◔", "yellow"),

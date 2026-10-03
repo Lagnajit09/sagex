@@ -19,10 +19,74 @@ from sagex.formatting import STATUS_ICON, relative_time
 
 console = Console()
 
+# Live-run chrome (header, script stderr, notes, summary) goes to stderr so that
+# `sagex run ... > out.txt` captures only the script's own stdout.
+err_console = Console(stderr=True, highlight=False)
+
 
 def note(text: str) -> None:
     """A dim one-line note (e.g. logs unavailable / hint)."""
     console.print(Text(text, style="bright_black"))
+
+
+# --- live runs (`sagex run`) -----------------------------------------------
+
+def run_header(script_name: str, server_name: str, details: list[str],
+               inputs: dict, secret_names: set) -> None:
+    """'▶ deploy.sh on web-1 · host · vault · key' plus the inputs (secrets masked)."""
+    line = Text()
+    line.append("▶ ", style="cyan")
+    line.append(script_name, style="bold")
+    line.append(" on ")
+    line.append(server_name, style="bold")
+    for detail in details:
+        if detail:
+            line.append(f" · {detail}", style="bright_black")
+    err_console.print(line, soft_wrap=True)
+    if inputs:
+        shown = Text("  ")
+        for i, (name, value) in enumerate(inputs.items()):
+            if i:
+                shown.append("  ")
+            shown.append(f"{name}=", style="bright_black")
+            shown.append("*****" if name in secret_names else (value or '""'))
+        err_console.print(shown, soft_wrap=True)
+
+
+def run_stdout(text: str) -> None:
+    """A line of the script's stdout, written raw (no styling) so it pipes cleanly."""
+    print(text, flush=True)
+
+
+def run_stderr(text: str) -> None:
+    """A line of the script's stderr (or a run error), in red on stderr."""
+    err_console.print(Text(text, style="red"), soft_wrap=True)
+
+
+def run_note(text: str) -> None:
+    """A dim status line on stderr (worker log lines, stop/detach notices)."""
+    err_console.print(Text(text, style="bright_black"), soft_wrap=True)
+
+
+def _elapsed(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+
+
+def run_summary(status: str | None, exit_code, seconds: float, execution_id: str | None) -> None:
+    """'✓ completed · exit 0 · 3.4s · execution <id>'."""
+    icon, color = STATUS_ICON.get(status or "", ("•", "white"))
+    parts = []
+    if exit_code is not None and exit_code != -1:
+        parts.append(f"exit {exit_code}")
+    parts.append(_elapsed(seconds))
+    if execution_id:
+        parts.append(f"execution {execution_id}")
+    line = Text()
+    line.append(f"{icon} {status or 'unknown'}", style=f"bold {color}")
+    line.append(" · " + " · ".join(parts), style="bright_black")
+    err_console.print(line, soft_wrap=True)
 
 
 # --- shared helpers --------------------------------------------------------

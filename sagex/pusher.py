@@ -83,6 +83,8 @@ _SCRIPT_DOC_LINES = [
     "  Autosage substitutes the value before the script runs.",
     "  Parameter names must be letters/digits/underscore and not start with a digit",
     "  (e.g. SERVICE_NAME). Names that don't qualify are skipped.",
+    "  Run on its own (sagex run script), the script asks only for the {{NAME}}",
+    "  markers in this file, so write {{NAME}} for every input it needs.",
     "",
     'SECRETS  (parameters of type "password", or a value from a vault credential)',
     "  Delivered the same way, as an environment variable ($PASSWORD / $env:PASSWORD).",

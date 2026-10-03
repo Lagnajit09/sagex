@@ -6,6 +6,8 @@ Talks to the base URL from config, sends the API key as `X-API-Key`, unwraps the
 from a background worker (like shell commands) so the UI never blocks.
 """
 
+import json
+
 import httpx
 
 from sagex import config
@@ -50,6 +52,31 @@ class ApiClient:
         """DELETE `path` and return the envelope's `data` (usually None on success)."""
         return self._request("DELETE", path)
 
+    def stream(self, method: str, path: str, json=None):
+        """Open a Server-Sent Events endpoint and yield (event, data) frames live.
+
+        No read timeout: a run can stay silent for minutes and the server sends no
+        heartbeats. Raises ApiError on an error response or a dropped connection.
+        """
+        url = f"{self.base_url}{path}"
+        headers = {**self._headers(), "Accept": "text/event-stream"}
+        timeout = httpx.Timeout(_TIMEOUT, read=None)
+        started = False
+        try:
+            with httpx.stream(method, url, headers=headers, json=json, timeout=timeout) as resp:
+                if resp.status_code >= 400:
+                    resp.read()
+                    self._unwrap(resp)
+                for frame in _sse_frames(resp.iter_lines()):
+                    started = True
+                    yield frame
+        except httpx.RequestError as exc:
+            if started:
+                raise ApiError("Lost the connection to the backend mid-run.") from exc
+            raise ApiError(
+                f"Can't reach the backend at {self.base_url}. Is it running?"
+            ) from exc
+
     # --- internals -----------------------------------------------------------
 
     def _headers(self) -> dict:
@@ -87,6 +114,24 @@ class ApiClient:
         if isinstance(body, dict) and "data" in body:
             return body["data"]
         return body
+
+
+def _sse_frames(lines):
+    """Group SSE lines into (event, data) frames; data is JSON-decoded when possible."""
+    event, data = "message", []
+    for line in lines:
+        if line.startswith("event:"):
+            event = line[len("event:"):].strip()
+        elif line.startswith("data:"):
+            data.append(line[len("data:"):].removeprefix(" "))
+        elif not line:
+            if data:
+                raw = "\n".join(data)
+                try:
+                    yield event, json.loads(raw)
+                except ValueError:
+                    yield event, raw
+            event, data = "message", []
 
 
 def build_client() -> ApiClient:
