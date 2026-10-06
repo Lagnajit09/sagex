@@ -28,6 +28,7 @@ for _stream in (sys.stdout, sys.stderr):
 from sagex import __version__, config, copier, pusher, render, runner
 from sagex.api import ApiError, build_client, resources
 from sagex.api import store
+from sagex.api.client import set_wait_indicator
 from sagex.app import SagexApp
 
 app = typer.Typer(
@@ -351,7 +352,9 @@ def _default(
 ) -> None:
     """Launch the terminal app when no subcommand is given."""
     if ctx.invoked_subcommand is None:
-        SagexApp().run()
+        SagexApp().run()               # the TUI shows its own loaders, never the CLI line
+    else:
+        set_wait_indicator(render.waiting)
 
 
 @app.command("syntax")
@@ -1869,37 +1872,60 @@ def push_script_cmd(
 # ---------------------------------------------------------------------------
 
 
-def _run_target(client, server_ref: str, vault_ref: str | None, key_ref: str | None):
-    """Resolve the server (optionally scoped to a vault) and the key to run with:
-    --key from the server's vault, else the server's attached key.
-    Returns (server, credential, vault_name)."""
-    vault_detail = None
+class _RunSetupError(Exception):
+    """A run can't start; carries the lines to print once the activity line is gone."""
+
+    def __init__(self, *lines: str) -> None:
+        super().__init__(lines[0])
+        self.lines = lines
+
+
+def _prepare_script_run(client, ref: str, server_ref: str, vault_ref: str | None,
+                        key_ref: str | None, activity: "render.RunActivity"):
+    """Look up everything a script run needs and return
+    (script, server, credential, vault_name, content).
+
+    The script, server and vault lists are fetched in parallel; their items already
+    carry what a run needs (params, vault/key links, nested keys), so no detail
+    calls follow. Prints nothing: it runs under the activity line, so failures are
+    raised for the caller to report.
+    """
+    scripts, servers, vaults = runner.fetch_parallel(
+        lambda: resources.list_scripts_full(client),
+        lambda: resources.list_servers_full(client),
+        lambda: resources.list_vaults_full(client),
+    )
+    vaults_by_id = {str(v.get("id")): v for v in vaults}
+    script = resources.pick_script(scripts, ref)
+
     if vault_ref:
-        vault_detail = _resolve_or_exit(resources.resolve_vault, client, vault_ref, "vault")
-        server = resources.find_server_in_vault(vault_detail, server_ref)
+        vault = resources.pick_vault(vaults, vault_ref)
+        server = resources.find_server_in_vault(vault, server_ref)
         if not server:
-            typer.echo(f"✗ No server '{server_ref}' in vault '{vault_detail.get('name')}'.")
-            raise typer.Exit(code=1)
+            raise _RunSetupError(f"✗ No server '{server_ref}' in vault '{vault.get('name')}'.")
     else:
-        server = _resolve_or_exit(resources.resolve_server, client, server_ref, "server")
+        names = {vid: v.get("name") for vid, v in vaults_by_id.items()}
+        server = resources.pick_server(servers, server_ref, names)
+        vault = vaults_by_id.get(str(server.get("vault"))) or {}
 
     if key_ref:
-        if vault_detail is None:
-            vault_detail = _resolve_or_exit(resources.resolve_vault, client, server.get("vault"), "vault")
-        cred = resources.find_credential_in_vault(vault_detail, key_ref)
+        cred = resources.find_credential_in_vault(vault, key_ref)
         if not cred:
-            typer.echo(f"✗ No key '{key_ref}' in the server's vault '{vault_detail.get('name')}'.")
-            typer.echo(f"  A server's key must live in the same vault. See:  sagex show vault \"{vault_detail.get('name')}\"")
-            raise typer.Exit(code=1)
+            raise _RunSetupError(
+                f"✗ No key '{key_ref}' in the server's vault '{vault.get('name')}'.",
+                f"  A server's key must live in the same vault. See:  sagex show vault \"{vault.get('name')}\"",
+            )
     elif server.get("credential"):
         cred = server.get("credential_details") or {"id": server.get("credential")}
     else:
-        typer.echo(f"✗ Server '{server.get('name')}' has no key attached.")
-        typer.echo(f"  Pass --key <name>, or attach one:  sagex update server \"{server.get('name')}\" --key <name>")
-        raise typer.Exit(code=1)
+        raise _RunSetupError(
+            f"✗ Server '{server.get('name')}' has no key attached.",
+            f"  Pass --key <name>, or attach one:  sagex update server \"{server.get('name')}\" --key <name>",
+        )
 
-    vault_name = (vault_detail or {}).get("name") or server.get("vault_name")
-    return server, cred, vault_name
+    activity.set("Reading the script")
+    (body,) = runner.fetch_parallel(lambda: resources.get_script_content(client, script["id"]))
+    return script, server, cred, vault.get("name"), (body or {}).get("content") or ""
 
 
 def _prompt_input(spec: dict) -> str:
@@ -1942,7 +1968,9 @@ def _collect_inputs(specs: list[dict], raw: list[str]) -> dict:
             raise typer.Exit(code=1)
         given[spec["name"]] = value
 
-    interactive = sys.stdin.isatty()
+    # Prompts are written to stderr, so both ends must be a terminal. stdin alone
+    # isn't enough: Windows reports a null-device stdin (as the TUI uses) as a TTY.
+    interactive = sys.stdin.isatty() and sys.stderr.isatty()
     inputs: dict[str, str] = {}
     for spec in specs:
         name = spec["name"]
@@ -1961,63 +1989,99 @@ def _collect_inputs(specs: list[dict], raw: list[str]) -> dict:
     return inputs
 
 
-def _show_run_frame(frame, state: dict) -> bool:
-    """Print one live-run frame and track its status; False once the run is done."""
+def _show_run_frame(frame, state: dict, log: "copier.ScriptRunLog | None") -> bool:
+    """Print one live-run frame, copy it to the local log, and track the run's
+    status; False once the run is done."""
     event, data = frame
     if not isinstance(data, dict):
         data = {"data": data}
+    text = None
     if event == "stdout":
-        render.run_stdout(str(data.get("data", "")))
+        text = str(data.get("data", ""))
+        render.run_stdout(text)
     elif event == "stderr":
-        render.run_stderr(str(data.get("data", "")))
+        text = str(data.get("data", ""))
+        render.run_stderr(text)
     elif event == "status":
         state["execution_id"] = data.get("execution_id") or state["execution_id"]
         state["status"] = data.get("status") or state["status"]
+        if log and state["execution_id"]:
+            log.start(state["execution_id"])
     elif event == "exit_code":
         state["exit_code"] = data.get("exit_code")
     elif event == "error":
-        render.run_stderr(str(data.get("message") or data.get("data") or "Run failed."))
+        text = str(data.get("message") or data.get("data") or "Run failed.")
+        render.run_stderr(text)
     elif event == "done":
         return False
     else:                                   # 'log' and anything newer: worker info lines
-        render.run_note(str(data.get("data", "")))
+        text = str(data.get("data", ""))
+        render.run_note(text)
+    if log and text is not None:
+        log.line(event, text)
     return True
 
 
-def _follow_script_run(client, payload: dict) -> int:
-    """Stream a script run to the terminal; return the exit code for the CLI."""
+def _follow_script_run(client, payload: dict, log: "copier.ScriptRunLog | None") -> int:
+    """Stream a script run to the terminal (and the local log); return the CLI exit code."""
     stream = runner.BackgroundStream(resources.run_script_stream(client, payload))
     state = {"execution_id": None, "status": None, "exit_code": None}
-    stopping = False
+    activity = render.RunActivity("Starting the run")
+    stopping = detached = False
     started = time.monotonic()
-    while True:
-        try:
-            frame = stream.get()
-            if frame is None or not _show_run_frame(frame, state):
-                break
-        except KeyboardInterrupt:
-            execution_id = state["execution_id"]
-            if stopping or not execution_id:
-                hint = f" (execution {execution_id})" if execution_id else ""
-                render.run_note(f"Detached — the run may still be going{hint}.")
-                return 130
-            stopping = True
-            render.run_note("Stopping the run… press Ctrl+C again to detach.")
+    with render.run_activity(activity):
+        while True:
             try:
-                resources.stop_script_execution(client, execution_id)
+                frame = stream.get()
+                if frame is None or not _show_run_frame(frame, state, log):
+                    break
+                if state["status"] == "running" and not stopping and activity.verb != "Running":
+                    activity.set("Running")
+            except KeyboardInterrupt:
+                if stopping or not state["execution_id"]:
+                    detached = True
+                    break
+                stopping = True
+                activity.set("Stopping", "ctrl+c again to detach")
+                render.run_note("Stop requested — waiting for the run to end.")
+                try:
+                    resources.stop_script_execution(client, state["execution_id"])
+                except ApiError as exc:
+                    render.run_note(f"Couldn't stop it: {exc.message}")
             except ApiError as exc:
-                render.run_note(f"Couldn't stop it: {exc.message}")
-        except ApiError as exc:
-            render.run_stderr(f"✗ {exc.message}")
-            return 1
+                render.run_stderr(f"✗ {exc.message}")
+                if log:
+                    log.line("error", exc.message)
+                break
 
-    status, exit_code = state["status"], state["exit_code"]
-    render.run_summary(status, exit_code, time.monotonic() - started, state["execution_id"])
+    seconds = time.monotonic() - started
+    status, exit_code, execution_id = state["status"], state["exit_code"], state["execution_id"]
+    if log:
+        log.finish(execution_id=execution_id, status=status, exit_code=exit_code,
+                   seconds=seconds, detached=detached)
+    if detached:
+        hint = f" (execution {execution_id})" if execution_id else ""
+        render.run_note(f"Detached — the run may still be going{hint}.")
+    elif execution_id:
+        render.run_summary(status, exit_code, seconds, execution_id)
+    if log and log.folder:
+        render.run_note(f"  logs: {_display_path(log.folder)}")
+    elif log and log.error:
+        render.run_note(f"  couldn't save logs locally: {log.error}")
+
+    if detached or status == "cancelled":
+        return 130
     if status == "completed":
         return 0
-    if status == "cancelled":
-        return 130
     return exit_code if isinstance(exit_code, int) and exit_code > 0 else 1
+
+
+def _display_path(path: Path) -> str:
+    """`path` relative to the current directory when it's inside it, else absolute."""
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
 
 
 @run_app.command("script")
@@ -2027,32 +2091,54 @@ def run_script_cmd(
     key: str = typer.Option(None, "--key", "-k", help="Key (name or id) from the server's vault. Defaults to the server's attached key."),
     vault: str = typer.Option(None, "--vault", help="Scope the server lookup to this vault (name or id) — for a server name shared across vaults."),
     params: list[str] = typer.Option(None, "--param", "-p", help="A script input as NAME=VALUE (repeatable). Secrets are asked for at a hidden prompt instead."),
+    no_log: bool = typer.Option(False, "--no-log", help="Don't save a copy of the logs under <workspace>/logs/script/<execution_id>/."),
 ) -> None:
     """Run a script on a server and stream its output live.
 
-    The script's inputs are its {{NAME}} markers. Each value comes from --param, else the script's saved default, else a prompt. Ctrl+C stops the run (press it again to detach). Exits with the script's exit code.
+    The script's inputs are its {{NAME}} markers. Each value comes from --param, else the script's saved default, else a prompt. Ctrl+C stops the run (press it again to detach). A copy of the logs is saved under <workspace>/logs/script/<execution_id>/. Exits with the script's exit code.
     """
     client = _client_or_exit()
-    script = _resolve_or_exit(resources.resolve_script, client, ref, "script")
-    server, cred, vault_name = _run_target(client, server_ref, vault, key)
+    activity = render.RunActivity("Looking up the script and server", "ctrl+c to cancel")
     try:
-        content = (resources.get_script_content(client, script["id"]) or {}).get("content") or ""
+        with render.run_activity(activity):
+            script, server, cred, vault_name, content = _prepare_script_run(
+                client, ref, server_ref, vault, key, activity)
+    except KeyboardInterrupt:
+        typer.echo("Cancelled — nothing was run.", err=True)
+        raise typer.Exit(code=130)
+    except resources.AmbiguousResource as exc:
+        render.ambiguous(exc)
+        raise typer.Exit(code=1)
+    except resources.ResourceNotFound as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
     except ApiError as exc:
-        typer.echo(f"✗ Couldn't read the script: {exc.message}")
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    except _RunSetupError as exc:
+        for line in exc.lines:
+            typer.echo(line)
         raise typer.Exit(code=1)
 
     specs = runner.script_params(content, script.get("parameters"))
     inputs = _collect_inputs(specs, params or [])
+    secret_names = {s["name"] for s in specs if s["secret"]}
 
-    render.run_header(
-        script.get("name") or ref,
-        server.get("name") or server_ref,
-        [server.get("host"),
-         vault_name and f"vault {vault_name}",
-         cred.get("name") and f"key {cred.get('name')}"],
-        inputs,
-        {s["name"] for s in specs if s["secret"]},
-    )
+    details = [server.get("host"),
+               vault_name and f"vault {vault_name}",
+               cred.get("name") and f"key {cred.get('name')}"]
+    render.run_header(script.get("name") or ref, server.get("name") or server_ref,
+                      details, inputs, secret_names)
+
+    log = None
+    if not no_log:
+        log = copier.ScriptRunLog(Path(config.workspace_dir()), {
+            "script": {"id": script.get("id"), "name": script.get("name")},
+            "server": {"id": server.get("id"), "name": server.get("name"), "host": server.get("host")},
+            "vault": vault_name,
+            "key": cred.get("name"),
+            "inputs": {k: ("*****" if k in secret_names else v) for k, v in inputs.items()},
+        })
     payload = {
         "script_details": {
             "script_id": int(script["id"]),
@@ -2066,7 +2152,7 @@ def run_script_cmd(
         },
         "inputs": inputs,
     }
-    raise typer.Exit(code=_follow_script_run(client, payload))
+    raise typer.Exit(code=_follow_script_run(client, payload, log))
 
 
 def _check(raise_on_fail: bool) -> None:

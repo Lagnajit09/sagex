@@ -4,9 +4,48 @@ Kept separate from data.py (what the data IS) and app.py (how the app behaves),
 so all "how a status looks" decisions live in one place.
 """
 
+import time
 from datetime import datetime, timezone
 
 from rich.text import Text
+
+
+# --- Activity line (shared by the CLI and the TUI) -------------------------
+# Claude-Code-style: a pulsing glyph, a shimmering verb, then elapsed time.
+# Avoid glyphs with an emoji form (e.g. ✳ U+2733): terminals whose font lacks them
+# fall back to a colour emoji font and flash a green square.
+_PULSE = "·✢✶✻✽✻✶✢"
+_ACCENT = "#d77757"
+_ACCENT_HOT = "#f0b49a"
+
+
+class RunActivity:
+    """A live '✻ Running… (12s · ctrl+c to stop)' line. Re-render it on a timer;
+    each render reflects the current time."""
+
+    def __init__(self, verb: str = "Running", hint: str = "ctrl+c to stop") -> None:
+        self.verb = verb
+        self.hint = hint
+        self._start = time.monotonic()
+
+    def set(self, verb: str, hint: str | None = None) -> None:
+        self.verb = verb
+        if hint is not None:
+            self.hint = hint
+
+    def __rich__(self) -> Text:
+        t = time.monotonic() - self._start
+        line = Text()
+        line.append(f"{_PULSE[int(t * 8) % len(_PULSE)]} ", style=_ACCENT)
+        word = f"{self.verb}…"
+        hot = int(t * 14) % (len(word) + 8) - 4
+        for i, ch in enumerate(word):
+            line.append(ch, style=f"bold {_ACCENT_HOT}" if abs(i - hot) <= 1 else _ACCENT)
+        secs = int(t)
+        elapsed = f"{secs}s" if secs < 60 else f"{secs // 60}m {secs % 60}s"
+        line.append(f" ({elapsed} · {self.hint})" if self.hint else f" ({elapsed})",
+                    style="bright_black")
+        return line
 
 
 def relative_time(iso: str | None) -> str:

@@ -7,6 +7,7 @@ from a background worker (like shell commands) so the UI never blocks.
 """
 
 import json
+from contextlib import nullcontext
 
 import httpx
 
@@ -14,6 +15,21 @@ from sagex import config
 from sagex.api import store
 
 _TIMEOUT = 15.0
+
+# Optional `factory(method) -> context manager` wrapped around each request; the
+# CLI installs one to show its activity line. None (e.g. in the TUI) = no indicator.
+_wait_indicator = None
+
+
+def set_wait_indicator(factory) -> None:
+    """Install (or clear, with None) the indicator shown while a request is in flight."""
+    global _wait_indicator
+    _wait_indicator = factory
+
+
+def waiting(method: str):
+    """The installed wait indicator for one request, or a no-op."""
+    return _wait_indicator(method) if _wait_indicator else nullcontext()
 
 
 class ApiError(Exception):
@@ -88,10 +104,11 @@ class ApiClient:
     def _request(self, method: str, path: str, params: dict | None = None, json=None):
         url = f"{self.base_url}{path}"
         try:
-            resp = httpx.request(
-                method, url, headers=self._headers(),
-                params=params, json=json, timeout=_TIMEOUT,
-            )
+            with waiting(method):
+                resp = httpx.request(
+                    method, url, headers=self._headers(),
+                    params=params, json=json, timeout=_TIMEOUT,
+                )
         except httpx.RequestError as exc:
             raise ApiError(
                 f"Can't reach the backend at {self.base_url}. Is it running?"

@@ -6,16 +6,21 @@ same data as widgets later; only this file is CLI-specific.
 """
 
 import difflib
+import sys
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime
 
 from rich.cells import cell_len
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from sagex.formatting import STATUS_ICON, relative_time
+from sagex.formatting import STATUS_ICON, RunActivity, relative_time
 
 console = Console()
 
@@ -54,8 +59,91 @@ def run_header(script_name: str, server_name: str, details: list[str],
 
 
 def run_stdout(text: str) -> None:
-    """A line of the script's stdout, written raw (no styling) so it pipes cleanly."""
-    print(text, flush=True)
+    """A line of the script's stdout, written raw (no styling) so it pipes cleanly.
+
+    While the activity line is showing on the same terminal, it goes through the
+    live console instead, which prints it above the activity line.
+    """
+    if _stdout_through_live:
+        err_console.print(Text.from_ansi(text), soft_wrap=True)
+    else:
+        print(text, flush=True)
+
+
+_stdout_through_live = False
+# One live display at a time: an explicit run_activity() suppresses the per-request
+# waiting() line (e.g. the parallel lookups that `run script` makes under its own).
+_live_lock = threading.Lock()
+_explicit_active = False
+_wait_depth = 0
+_wait_live: Live | None = None
+_wait_activity: RunActivity | None = None
+_wait_ended = 0.0
+
+_WAIT_VERBS = {"GET": "Loading", "DELETE": "Deleting"}
+
+
+def _activity_live(activity: RunActivity) -> Live:
+    # Live's default stdout redirect would push piped output into stderr; output is
+    # routed explicitly instead (see run_stdout()).
+    return Live(activity, console=err_console, refresh_per_second=12, transient=True,
+                redirect_stdout=False, redirect_stderr=False)
+
+
+@contextmanager
+def run_activity(activity: RunActivity):
+    """Show `activity` on stderr while the block runs (no-op when stderr isn't a
+    terminal). The line is cleared on exit so the summary prints in its place."""
+    global _stdout_through_live, _explicit_active
+    if not err_console.is_terminal:
+        yield
+        return
+    with _live_lock:
+        _explicit_active = True
+    _stdout_through_live = sys.stdout.isatty()
+    try:
+        with _activity_live(activity):
+            yield
+    finally:
+        _stdout_through_live = False
+        with _live_lock:
+            _explicit_active = False
+
+
+@contextmanager
+def waiting(method: str):
+    """Show the activity line while one API request is in flight.
+
+    Installed as the API client's wait indicator for CLI subcommands. The line is
+    cleared as soon as the request returns, so it never overlaps the command's own
+    output or prompts. Back-to-back requests keep one running timer; a pause longer
+    than a second (e.g. a confirmation prompt) starts a fresh one.
+    """
+    global _wait_depth, _wait_live, _wait_activity, _wait_ended
+    with _live_lock:
+        if not _explicit_active and err_console.is_terminal:
+            if _wait_depth == 0:
+                verb = _WAIT_VERBS.get(method.upper(), "Saving")
+                if _wait_activity is None or time.monotonic() - _wait_ended > 1.0:
+                    _wait_activity = RunActivity(verb, "")
+                else:
+                    _wait_activity.set(verb)
+                _wait_live = _activity_live(_wait_activity)
+                _wait_live.start()
+            _wait_depth += 1
+            counted = True
+        else:
+            counted = False
+    try:
+        yield
+    finally:
+        if counted:
+            with _live_lock:
+                _wait_depth -= 1
+                if _wait_depth == 0 and _wait_live is not None:
+                    _wait_live.stop()
+                    _wait_live = None
+                    _wait_ended = time.monotonic()
 
 
 def run_stderr(text: str) -> None:

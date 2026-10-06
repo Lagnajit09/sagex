@@ -68,6 +68,33 @@ def check_value(ptype: str, value: str) -> str | None:
     return None
 
 
+def fetch_parallel(*calls):
+    """Run zero-argument callables concurrently and return their results in order.
+
+    Re-raises the first error. Joins in short slices because a blocking wait can't
+    be interrupted by Ctrl+C on Windows; daemon threads let the CLI exit at once.
+    """
+    results: list = [None] * len(calls)
+    errors: list = [None] * len(calls)
+
+    def work(i, fn):
+        try:
+            results[i] = fn()
+        except Exception as exc:
+            errors[i] = exc
+
+    threads = [threading.Thread(target=work, args=(i, fn), daemon=True) for i, fn in enumerate(calls)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        while t.is_alive():
+            t.join(0.2)
+    for exc in errors:
+        if exc is not None:
+            raise exc
+    return results
+
+
 class BackgroundStream:
     """Read an SSE frame iterator on a daemon thread.
 

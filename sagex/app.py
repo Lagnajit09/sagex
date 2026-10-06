@@ -14,6 +14,7 @@ from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 from sagex import config, shell
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import run_label, trigger_label
+from sagex.widgets.activity import ActivityLine
 from sagex.widgets.message import ChatMessage
 from sagex.widgets.prompt_input import PromptInput
 
@@ -36,6 +37,8 @@ class SagexApp(App):
         self.config = config.load()                       # persisted settings (~/.sagex)
         self.session = shell.ShellSession(preferred=self.config.get("shell"))
         self._busy = False                                # is a command currently running?
+        self._load_gen = 0                                # bumps on every (re)load
+        self._pending_loads: set = set()                  # branches still loading (this gen)
 
         # Workspace = the local folder shown in the "local" environment.
         ws = self.config.get("workspace")
@@ -58,11 +61,13 @@ class SagexApp(App):
                 )
                 yield Tree("Resources", id="resources")                    # server environment
                 yield DirectoryTree(self._workspace, id="workspace-tree")  # local environment
+                yield ActivityLine(id="resources-activity")                # while branches load
                 yield Static(id="resources-status")
 
             # The right side is a vertical stack: scrolling messages + input box.
             with Vertical(id="autobot"):
                 yield VerticalScroll(id="chat-log")     # scrolls; holds ChatMessage widgets
+                yield ActivityLine(id="command-activity")   # while a command runs
                 yield PromptInput(
                     placeholder="Ask Autobot…   (start with  !  to run a shell command)",
                     id="chat-input",
@@ -137,6 +142,7 @@ class SagexApp(App):
                 )
                 return
             self._busy = True
+            self.query_one("#command-activity", ActivityLine).start("Running", "esc to stop")
             self.execute_command(command)
         else:                            # otherwise -> agent prompt (placeholder for now)
             self.add_message(text, role="user")
@@ -194,11 +200,14 @@ class SagexApp(App):
 
     def action_stop_command(self) -> None:
         """Esc: stop the currently running command, if any."""
+        if self._busy:
+            self.query_one("#command-activity", ActivityLine).set("Stopping", "")
         self.session.cancel()            # kills the process; the worker then finishes
 
     def _finish_command(self) -> None:
         """(main thread) Called when a command finishes — clear the busy flag."""
         self._busy = False
+        self.query_one("#command-activity", ActivityLine).stop()
         self._refresh_prompt()           # the working dir may have changed
 
     def action_cycle_shell(self) -> None:
@@ -215,10 +224,13 @@ class SagexApp(App):
     def _start_loaders(self) -> None:
         """(Re)load every resource branch, resetting each to 'Loading…' first."""
         self._set_status("")             # clear any previous error
+        self._load_gen += 1
+        self._pending_loads = {id(node) for node, _ in self._loaders}
+        self.query_one("#resources-activity", ActivityLine).start("Loading resources")
         for node, fetch in self._loaders:
             node.remove_children()
             node.add_leaf("Loading…")
-            self._load_branch(node, fetch)
+            self._load_branch(node, fetch, self._load_gen)
 
     def action_refresh(self) -> None:
         """F5: reload the current environment (also the retry for a failed load)."""
@@ -281,7 +293,7 @@ class SagexApp(App):
         self.query_one("#resources-status", Static).update(text)
 
     @work(thread=True)
-    def _load_branch(self, node, fetch) -> None:
+    def _load_branch(self, node, fetch, gen: int) -> None:
         """Fetch display labels for a tree branch in a background thread.
 
         `fetch` takes an ApiClient and returns a list of labels (str or Text).
@@ -289,12 +301,16 @@ class SagexApp(App):
         try:
             labels = fetch(build_client())
         except ApiError as exc:
-            self.call_from_thread(self._fill_branch, node, None, exc.message)
+            self.call_from_thread(self._fill_branch, node, None, exc.message, gen)
             return
-        self.call_from_thread(self._fill_branch, node, labels, None)
+        self.call_from_thread(self._fill_branch, node, labels, None, gen)
 
-    def _fill_branch(self, node, labels, error) -> None:
+    def _fill_branch(self, node, labels, error, gen: int) -> None:
         """(main thread) Fill a branch with results; route any error to one status line."""
+        if gen == self._load_gen:        # a stale load (before an F5) doesn't count
+            self._pending_loads.discard(id(node))
+            if not self._pending_loads:
+                self.query_one("#resources-activity", ActivityLine).stop()
         node.remove_children()           # clear the "Loading…" placeholder
         if error:
             self._set_status(f"⚠ {error}  ·  F5 to retry")   # one shared message, not per-branch

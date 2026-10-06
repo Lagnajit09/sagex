@@ -7,6 +7,7 @@ so the UI code just asks for "the list of workflow names" and gets a clean list.
 import httpx
 
 from sagex.api.client import ApiClient, ApiError
+from sagex.api.client import waiting as client_waiting
 from sagex.formatting import relative_time, truncate_name
 
 
@@ -153,13 +154,8 @@ def rename_workflow(client: ApiClient, workflow_id, new_name: str) -> dict:
     return client.patch(f"/api/workflows/{workflow_id}/", json={"name": new_name})
 
 
-def resolve_script(client: ApiClient, ref: str) -> dict:
-    """Resolve a script name-or-id and return its metadata record (no code body).
-
-    Script ids are ints (unlike workflows' UUIDs); the code lives in a separate
-    content endpoint — see `get_script_content`.
-    """
-    items = _as_list(client.get("/api/scripts/"))
+def pick_script(items: list[dict], ref: str) -> dict:
+    """Match a script by id or name in an already-fetched list (no API call)."""
     hits = _match(items, ref)
     if not hits:
         raise ResourceNotFound("script", ref)
@@ -169,7 +165,17 @@ def resolve_script(client: ApiClient, ref: str) -> dict:
              "hint": f"v{s.get('version')} · updated {relative_time(s.get('updated_at'))}"}
             for s in hits
         ])
-    return client.get(f"/api/scripts/{hits[0]['id']}/")
+    return hits[0]
+
+
+def resolve_script(client: ApiClient, ref: str) -> dict:
+    """Resolve a script name-or-id and return its metadata record (no code body).
+
+    Script ids are ints (unlike workflows' UUIDs); the code lives in a separate
+    content endpoint — see `get_script_content`.
+    """
+    hit = pick_script(_as_list(client.get("/api/scripts/")), ref)
+    return client.get(f"/api/scripts/{hit['id']}/")
 
 
 def get_script_content(client: ApiClient, script_id) -> dict:
@@ -263,7 +269,8 @@ def fetch_log_text(url: str) -> str:
     if not url:
         return ""
     try:
-        resp = httpx.get(url, timeout=30.0)
+        with client_waiting("GET"):
+            resp = httpx.get(url, timeout=30.0)
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         raise ApiError(f"couldn't download log ({exc})")
@@ -470,19 +477,31 @@ def resolve_server(client: ApiClient, ref: str) -> dict:
     `credential_details` (masked — no secrets).
     """
     items = _as_list(client.get("/api/vault/servers/"))
+    try:
+        hit = pick_server(items, ref, {})
+    except AmbiguousResource:
+        # Only fetch vault names when they're needed to tell the matches apart.
+        hit = pick_server(items, ref, _vault_name_map(client))
+    server = client.get(f"/api/vault/servers/{hit['id']}/")
+    server["vault_name"] = _vault_name(client, server.get("vault"))
+    return server
+
+
+def pick_server(items: list[dict], ref: str, vault_names: dict) -> dict:
+    """Match a server by id or name in an already-fetched list (no API call).
+
+    `vault_names` maps vault id -> name, used to label matches that share a name.
+    """
     hits = _match(items, ref)
     if not hits:
         raise ResourceNotFound("server", ref)
     if len(hits) > 1:
-        vmap = _vault_name_map(client)
         raise AmbiguousResource("server", ref, [
             {"id": s.get("id"), "name": s.get("name") or "(unnamed)",
-             "hint": _dotted(s.get("host"), vmap.get(str(s.get("vault"))))}
+             "hint": _dotted(s.get("host"), vault_names.get(str(s.get("vault"))))}
             for s in hits
         ])
-    server = client.get(f"/api/vault/servers/{hits[0]['id']}/")
-    server["vault_name"] = _vault_name(client, server.get("vault"))
-    return server
+    return hits[0]
 
 
 def create_server(client: ApiClient, payload: dict) -> dict:
@@ -505,7 +524,15 @@ def update_server(client: ApiClient, server_id, payload: dict) -> dict:
 
 def resolve_vault(client: ApiClient, ref: str) -> dict:
     """Resolve a vault by id or name; returns its detail (nested creds + servers)."""
-    items = _as_list(client.get("/api/vault/vaults/"))
+    hit = pick_vault(_as_list(client.get("/api/vault/vaults/")), ref)
+    return client.get(f"/api/vault/vaults/{hit['id']}/")
+
+
+def pick_vault(items: list[dict], ref: str) -> dict:
+    """Match a vault by id or name in an already-fetched list (no API call).
+
+    List items already carry the nested servers and credentials.
+    """
     hits = _match(items, ref)
     if not hits:
         raise ResourceNotFound("vault", ref)
@@ -515,7 +542,7 @@ def resolve_vault(client: ApiClient, ref: str) -> dict:
              "hint": f"modified {relative_time(v.get('modified_at'))}"}
             for v in hits
         ])
-    return client.get(f"/api/vault/vaults/{hits[0]['id']}/")
+    return hits[0]
 
 
 def find_vault_by_name(client: ApiClient, name: str) -> dict | None:
