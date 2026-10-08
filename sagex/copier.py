@@ -14,6 +14,8 @@ Layout under the workspace:
     logs/script/<execution_id>/    saved live by `sagex run script`
         run.json                   target, inputs (secrets masked), final status
         logs.log                   header + timestamped output in arrival order
+    logs/workflow/<run_id>/        saved by `sagex run workflow` when the run ends
+        run.json, logs.log         same shape as runs/ above
 
 Secrets are never written: keys/credentials are refused at the CLI layer, and runs
 past the 90-day retention window get a note instead of (unavailable) log bytes.
@@ -129,8 +131,25 @@ def copy_run(client, workspace: Path, run: dict) -> list[Path]:
     """Write <ws>/runs/<workflow>__<id8>/{run.json, logs.log}. Returns paths written."""
     rid = str(run.get("id") or "")
     folder = workspace / "runs" / f"{safe_name(run.get('workflow_name'), 'run')}__{rid[:8]}"
+    return _write_run_bundle(client, folder, run)
 
-    nodes = resources.get_run_nodes(client, rid)
+
+def save_workflow_run(client, workspace: Path, run: dict, nodes: list[dict] | None = None) -> Path:
+    """Write a finished run's {run.json, logs.log} under <ws>/logs/workflow/<run_id>/.
+
+    Logs come from the server's stored copies (not the live stream), so they're
+    complete even for output that streamed before the CLI connected.
+    """
+    folder = workspace / "logs" / "workflow" / safe_name(str(run.get("id") or ""), "run")
+    _write_run_bundle(client, folder, run, nodes)
+    return folder
+
+
+def _write_run_bundle(client, folder: Path, run: dict, nodes: list[dict] | None = None) -> list[Path]:
+    """Write {run.json, logs.log} for a run into `folder`; fetches node results if not given."""
+    rid = str(run.get("id") or "")
+    if nodes is None:
+        nodes = resources.get_run_nodes(client, rid)
     written = [_write(folder / "run.json", json.dumps(_slim_run(run, nodes), indent=2))]
 
     if any(n.get("logs_expired") for n in nodes):

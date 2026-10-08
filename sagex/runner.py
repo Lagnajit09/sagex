@@ -51,6 +51,71 @@ def script_params(content: str, meta: list | None) -> list[dict]:
     return out
 
 
+def workflow_params(nodes: list | None) -> list[dict]:
+    """The parameters a workflow run takes: one entry per parameter id across its
+    nodes (first occurrence wins; a value saved on any node counts as the default).
+    Mirrors the server's build_needs_params.
+
+    Each entry is {id, name, type, default, secret, source, description, nodes};
+    `source` is 'manual' (a value) or 'output' (fed by another node), `nodes` lists
+    the labels of the nodes using it. A secret's default is never to be displayed.
+    """
+    out: list[dict] = []
+    by_id: dict[str, dict] = {}
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data") or {}
+        params = data.get("parameters")
+        if not isinstance(params, list):
+            continue
+        label = data.get("label") or node.get("id") or ""
+        for p in params:
+            if not isinstance(p, dict) or not p.get("id"):
+                continue
+            value = "" if p.get("value") is None else str(p.get("value"))
+            entry = by_id.get(p["id"])
+            if entry is None:
+                ptype = p.get("type") or "string"
+                entry = {
+                    "id": p["id"],
+                    "name": p.get("name") or p["id"],
+                    "type": ptype,
+                    "default": value,
+                    "secret": ptype == "password",
+                    "source": (p.get("sourceType") or "manual").lower(),
+                    "description": p.get("description") or "",
+                    "nodes": [label],
+                }
+                by_id[p["id"]] = entry
+                out.append(entry)
+            else:
+                entry["nodes"].append(label)
+                if not entry["default"] and value:
+                    entry["default"] = value
+    return out
+
+
+_NOTE_TAGS = ("[PARAM]", "[EVAL]", "[PRUNE]", "[SYSTEM]", "[EMAIL]")
+
+
+def classify_log_line(text: str) -> tuple[str, str]:
+    """Split a workflow 'log' line into (kind, text), kind being stdout/stderr/note.
+
+    The engine prefixes script stdout with '> ', stderr with '[ERROR] ', worker
+    info with '[INFO] ', and its own notes with tags like '[PARAM]'.
+    """
+    if text.startswith("> "):
+        return "stdout", text[2:]
+    if text.startswith("[ERROR] "):
+        return "stderr", text[len("[ERROR] "):]
+    if text.startswith("[INFO] "):
+        return "note", text[len("[INFO] "):]
+    if text.startswith(_NOTE_TAGS):
+        return "note", text
+    return "stdout", text
+
+
 def check_value(ptype: str, value: str) -> str | None:
     """Why `value` doesn't fit a number/boolean input, or None if it's fine.
 

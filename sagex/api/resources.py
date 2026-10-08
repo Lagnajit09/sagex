@@ -260,6 +260,35 @@ def get_run_nodes(client: ApiClient, run_id) -> list[dict]:
     return _as_list(client.get(f"/api/execution-engine/workflows/runs/{run_id}/nodes/"))
 
 
+def get_workflow_run(client: ApiClient, run_id) -> dict:
+    """A run's record: status, error_message, started_at/finished_at, inputs (masked)."""
+    return client.get(f"/api/execution-engine/workflows/runs/{run_id}/")
+
+
+def trigger_workflow_run(client: ApiClient, workflow_id, payload: dict) -> dict:
+    """Queue an on-demand (manual) run; returns {workflow_run_id, status}.
+
+    Payload: {inputs: {param_id: value}, send_email, user_email}. Parameters left out
+    of `inputs` keep the value saved in the workflow. The server validates the graph
+    and bindings first (400 with a message if they're incomplete).
+    """
+    return client.post(f"/api/execution-engine/workflows/{workflow_id}/run/", json=payload)
+
+
+def stream_workflow_run(client: ApiClient, run_id):
+    """Yield a run's live (event, data) SSE frames.
+
+    Live only: events published before this connects are not replayed, and an
+    already-finished run yields just its final status + done.
+    """
+    return client.stream("GET", f"/api/execution-engine/workflows/runs/{run_id}/stream/")
+
+
+def cancel_workflow_run(client: ApiClient, run_id) -> None:
+    """Cancel a queued/running run. The server publishes no 'done' event for it."""
+    client.post(f"/api/execution-engine/workflows/runs/{run_id}/cancel/")
+
+
 def fetch_log_text(url: str) -> str:
     """Download a signed GCS log URL directly (no API key / envelope) and return text.
 

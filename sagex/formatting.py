@@ -76,6 +76,7 @@ STATUS_ICON = {
     "running":   ("⟳", "yellow"),
     "queued":    ("◔", "yellow"),
     "cancelled": ("⊘", "bright_black"),
+    "skipped":   ("–", "bright_black"),     # a node on a decision's pruned branch
 }
 _DEFAULT_ICON = ("•", "white")   # for any status we don't recognize
 

@@ -12,6 +12,8 @@ otherwise the matching `auth` command runs as a plain CLI action.
 import json
 import sys
 import time
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -75,7 +77,7 @@ app.add_typer(trigger_app, name="trigger")
 rename_app = typer.Typer(help="Rename a resource (workflow, script, vault, server, key).")
 app.add_typer(rename_app, name="rename")
 
-run_app = typer.Typer(help="Run a script on a server and watch its output live.")
+run_app = typer.Typer(help="Run a script or workflow now and watch it live.")
 app.add_typer(run_app, name="run")
 
 # Lightweight authenticated endpoint used to verify a key.
@@ -1880,6 +1882,30 @@ class _RunSetupError(Exception):
         self.lines = lines
 
 
+@contextmanager
+def _setup_errors():
+    """Turn failures from a run's setup step (which runs under the activity line and
+    prints nothing) into clean messages + exits once that line has cleared."""
+    try:
+        yield
+    except KeyboardInterrupt:
+        typer.echo("Cancelled — nothing was run.", err=True)
+        raise typer.Exit(code=130)
+    except resources.AmbiguousResource as exc:
+        render.ambiguous(exc)
+        raise typer.Exit(code=1)
+    except resources.ResourceNotFound as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    except _RunSetupError as exc:
+        for line in exc.lines:
+            typer.echo(line)
+        raise typer.Exit(code=1)
+
+
 def _prepare_script_run(client, ref: str, server_ref: str, vault_ref: str | None,
                         key_ref: str | None, activity: "render.RunActivity"):
     """Look up everything a script run needs and return
@@ -2099,26 +2125,9 @@ def run_script_cmd(
     """
     client = _client_or_exit()
     activity = render.RunActivity("Looking up the script and server", "ctrl+c to cancel")
-    try:
-        with render.run_activity(activity):
-            script, server, cred, vault_name, content = _prepare_script_run(
-                client, ref, server_ref, vault, key, activity)
-    except KeyboardInterrupt:
-        typer.echo("Cancelled — nothing was run.", err=True)
-        raise typer.Exit(code=130)
-    except resources.AmbiguousResource as exc:
-        render.ambiguous(exc)
-        raise typer.Exit(code=1)
-    except resources.ResourceNotFound as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1)
-    except ApiError as exc:
-        typer.echo(f"✗ {exc.message}")
-        raise typer.Exit(code=1)
-    except _RunSetupError as exc:
-        for line in exc.lines:
-            typer.echo(line)
-        raise typer.Exit(code=1)
+    with _setup_errors(), render.run_activity(activity):
+        script, server, cred, vault_name, content = _prepare_script_run(
+            client, ref, server_ref, vault, key, activity)
 
     specs = runner.script_params(content, script.get("parameters"))
     inputs = _collect_inputs(specs, params or [])
@@ -2153,6 +2162,300 @@ def run_script_cmd(
         "inputs": inputs,
     }
     raise typer.Exit(code=_follow_script_run(client, payload, log))
+
+
+_RUN_FINISHED = ("success", "failed", "cancelled")
+
+
+def _node_index(nodes: list) -> dict:
+    """node_id -> (label, kind) where kind is trigger/script/email/decision."""
+    index = {}
+    for n in nodes or []:
+        data = n.get("data") if isinstance(n.get("data"), dict) else {}
+        kind = n.get("type") or ""
+        if kind == "action":
+            kind = data.get("type") or "action"
+        index[n.get("id")] = (data.get("label") or n.get("id") or "node", kind)
+    return index
+
+
+def _collect_workflow_inputs(specs: list[dict], raw: list[str]) -> tuple[dict, dict]:
+    """Return (inputs to send keyed by parameter id, values to show keyed by label).
+
+    --param takes a parameter name, or its id when a name repeats across nodes.
+    Parameters not set keep the value saved in the workflow (and aren't sent);
+    ones with no saved value are prompted for. Secrets are refused as flags, and
+    parameters fed by another node's output can't be set.
+    """
+    manual = [s for s in specs if s["source"] == "manual"]
+    by_id = {s["id"]: s for s in specs}
+    name_count: dict[str, int] = {}
+    for s in manual:
+        name_count[s["name"].lower()] = name_count.get(s["name"].lower(), 0) + 1
+
+    def ref_for(s):           # how to address a parameter on the command line
+        return s["name"] if name_count[s["name"].lower()] == 1 else s["id"]
+
+    given: dict[str, str] = {}
+    for item in raw:
+        key, sep, value = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            typer.echo(f"✗ --param must look like NAME=VALUE (got '{item}').")
+            raise typer.Exit(code=1)
+        spec = by_id.get(key)
+        if spec is None:
+            hits = [s for s in specs if s["name"].lower() == key.lower()]
+            if not hits:
+                known = ", ".join(sorted({s["name"] for s in manual})) or "none"
+                typer.echo(f"✗ '{key}' isn't a parameter of this workflow. Its parameters: {known}.")
+                raise typer.Exit(code=1)
+            if len(hits) > 1:
+                typer.echo(f"✗ '{key}' names {len(hits)} different parameters — pass its id instead:")
+                for s in hits:
+                    typer.echo(f"    --param {s['id']}=VALUE   ({', '.join(s['nodes'])})")
+                raise typer.Exit(code=1)
+            spec = hits[0]
+        if spec["source"] != "manual":
+            typer.echo(f"✗ '{spec['name']}' takes its value from another node's output; it can't be set here.")
+            raise typer.Exit(code=1)
+        if spec["secret"]:
+            typer.echo(f"✗ '{spec['name']}' is a secret — leave it off the command line; you'll be asked for it (hidden).")
+            raise typer.Exit(code=1)
+        problem = runner.check_value(spec["type"], value)
+        if problem:
+            typer.echo(f"✗ --param {spec['name']}: {problem} (got '{value}').")
+            raise typer.Exit(code=1)
+        given[spec["id"]] = value
+
+    interactive = sys.stdin.isatty() and sys.stderr.isatty()
+    inputs: dict[str, str] = {}
+    shown: dict[str, str] = {}
+    for s in manual:
+        if s["id"] in given:
+            value = inputs[s["id"]] = given[s["id"]]
+        elif s["default"]:
+            value = s["default"]                     # saved in the workflow; not sent
+        elif interactive:
+            value = inputs[s["id"]] = _prompt_input(s)
+        elif s["secret"]:
+            typer.echo(f"✗ '{s['name']}' is a secret and can only be typed at a hidden prompt — run this in a terminal.")
+            raise typer.Exit(code=1)
+        else:
+            typer.echo(f"✗ No value for '{s['name']}'. Pass --param {ref_for(s)}=VALUE.")
+            raise typer.Exit(code=1)
+        label = s["name"] if name_count[s["name"].lower()] == 1 else f"{s['name']} ({s['nodes'][0]})"
+        shown[label] = "*****" if s["secret"] else value
+    return inputs, shown
+
+
+def _show_workflow_frame(frame, state: dict, node_index: dict) -> bool:
+    """Print one live-run frame and track the run; False once it reports 'done'."""
+    event, data = frame
+    if not isinstance(data, dict):
+        data = {"data": data}
+    if event == "status":
+        state["status"] = data.get("status") or state["status"]
+        if data.get("error_message"):
+            state["error"] = data["error_message"]
+    elif event == "node_start":
+        label, kind = node_index.get(data.get("node_id"), (data.get("node_id") or "node", ""))
+        label = data.get("node_label") or label
+        state["current"] = label
+        if state["status"] == "queued":
+            state["status"] = "running"           # the 'running' status may have streamed early
+        if kind != "trigger":
+            render.workflow_node_start(label, kind)
+    elif event == "node_complete":
+        node_id = data.get("node_id")
+        state["seen"].add(node_id)
+        label, kind = node_index.get(node_id, (node_id or "node", ""))
+        # The trigger finishes instantly and usually streams before we connect, so
+        # it's never shown (keeps the output the same either way).
+        if kind != "trigger":
+            branch = data.get("taken_branch") if "decision_result" in data else None
+            render.workflow_node_done(data.get("node_label") or label, data.get("status"),
+                                      data.get("exit_code"), data.get("duration"), branch)
+    elif event == "log":
+        kind, text = runner.classify_log_line(str(data.get("stdout") or data.get("data") or ""))
+        {"stdout": render.run_stdout, "stderr": render.run_stderr, "note": render.run_note}[kind](text)
+    elif event == "stdout":
+        render.run_stdout(str(data.get("data", "")))
+    elif event == "stderr":
+        render.run_stderr(str(data.get("data", "")))
+    elif event == "error":
+        render.run_stderr(str(data.get("message") or data.get("data") or "Stream error."))
+    elif event == "done":
+        if data.get("status") in _RUN_FINISHED:
+            state["status"] = data["status"]
+        return False
+    return True
+
+
+def _pump_workflow_stream(client, run_id: str, state: dict, node_index: dict,
+                          activity: "render.RunActivity") -> bool:
+    """Show one stream connection's frames; True if it ended with the run finished.
+
+    The connection lives in state["stream"] so a Ctrl+C (whose cancel may fail)
+    resumes the same stream instead of opening a second one and losing frames.
+    """
+    if state.get("stream") is None:
+        state["stream"] = runner.BackgroundStream(resources.stream_workflow_run(client, run_id))
+    while True:
+        try:
+            frame = state["stream"].get()
+        except ApiError:
+            state["stream"] = None
+            raise
+        if frame is None:
+            state["stream"] = None
+            return False                          # ended early (dropped / 30-min cap)
+        state["errors"] = 0
+        if not _show_workflow_frame(frame, state, node_index):
+            state["stream"] = None
+            return state["status"] in _RUN_FINISHED
+        if state["status"] == "running":
+            activity.set(f"Running {state['current']}" if state["current"] else "Running")
+
+
+def _iso_seconds(start: str | None, end: str | None) -> float | None:
+    try:
+        return (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _follow_workflow_run(client, run_id: str, node_index: dict, workspace: Path | None) -> int:
+    """Follow a workflow run live until it ends; return the CLI exit code.
+
+    The stream is live-only, so it reconnects if it ends early and the run's node
+    records are checked at the end (covering anything that streamed before we
+    connected). Ctrl+C cancels the run; a second Ctrl+C detaches.
+    """
+    state = {"status": "queued", "error": "", "seen": set(), "current": "", "errors": 0, "stream": None}
+    activity = render.RunActivity("Queued — waiting for a worker", "ctrl+c to cancel")
+    started = time.monotonic()
+    cancel_tried = detached = lost = False
+    with render.run_activity(activity):
+        while True:
+            try:
+                if _pump_workflow_stream(client, run_id, state, node_index, activity):
+                    break
+                run = resources.get_workflow_run(client, run_id)     # did it finish meanwhile?
+                if run.get("status") in _RUN_FINISHED:
+                    state["status"], state["error"] = run["status"], run.get("error_message") or ""
+                    break
+                render.run_note("Reconnecting to the live stream…")
+                time.sleep(1)
+            except KeyboardInterrupt:
+                if cancel_tried:
+                    detached = True
+                    break
+                cancel_tried = True
+                activity.set("Cancelling", "ctrl+c again to detach")
+                try:
+                    resources.cancel_workflow_run(client, run_id)
+                    state["status"] = "cancelled"
+                    break
+                except KeyboardInterrupt:
+                    detached = True
+                    break
+                except ApiError as exc:
+                    render.run_note(f"Couldn't cancel: {exc.message}")
+                    activity.set("Running", "ctrl+c again to detach")
+            except ApiError as exc:
+                state["errors"] += 1
+                render.run_stderr(f"✗ {exc.message}")
+                if state["errors"] >= 3:
+                    lost = True
+                    break
+
+    seconds = time.monotonic() - started
+    if detached or lost:
+        why = "Detached — the run is still going" if detached else "Lost the live stream"
+        render.run_note(f"{why} (run {run_id}). Check it later:  sagex show run {run_id}")
+        return 130 if detached else 1
+
+    # Reconcile with the run's records, then save the logs from the server's copies.
+    run, nodes = {"id": run_id, "status": state["status"]}, None
+    try:
+        with render.run_activity(render.RunActivity("Collecting the results", "")):
+            run, nodes = runner.fetch_parallel(
+                lambda: resources.get_workflow_run(client, run_id),
+                lambda: resources.get_run_nodes(client, run_id),
+            )
+    except (ApiError, KeyboardInterrupt) as exc:
+        render.run_note(f"Couldn't fetch the run's final results: {getattr(exc, 'message', 'interrupted')}")
+
+    for n in sorted(nodes or [], key=lambda x: x.get("execution_order") or 0):
+        node_id = n.get("node_id")
+        label, kind = node_index.get(node_id, (n.get("node_label") or node_id, ""))
+        if node_id in state["seen"] or kind == "trigger" or n.get("status") in (None, "pending", "running"):
+            continue
+        render.workflow_node_done(n.get("node_label") or label, n.get("status"), n.get("exit_code"),
+                                  _iso_seconds(n.get("started_at"), n.get("finished_at")))
+
+    status = run.get("status") or state["status"]
+    if status == "failed" and (run.get("error_message") or state["error"]):
+        render.run_stderr(run.get("error_message") or state["error"])
+    total = _iso_seconds(run.get("started_at"), run.get("finished_at")) or seconds
+    render.run_summary(status, None, total, run_id, noun="run")
+
+    if workspace is not None and nodes is not None:
+        try:
+            with render.run_activity(render.RunActivity("Saving the logs", "")):
+                folder = copier.save_workflow_run(client, workspace, run, nodes)
+            render.run_note(f"  logs: {_display_path(folder)}")
+        except (OSError, ApiError, KeyboardInterrupt) as exc:
+            render.run_note(f"  couldn't save logs locally: {getattr(exc, 'message', exc)}")
+
+    if status == "success":
+        return 0
+    return 130 if status == "cancelled" else 1
+
+
+@run_app.command("workflow")
+def run_workflow_cmd(
+    ref: str = typer.Argument(..., help="Workflow name or id."),
+    params: list[str] = typer.Option(None, "--param", "-p", help="Set a parameter as NAME=VALUE (or PARAM_ID=VALUE when a name repeats across nodes). Repeatable; secrets are asked for at a hidden prompt."),
+    notify: str = typer.Option(None, "--notify", help="Email this address when the run finishes."),
+    no_log: bool = typer.Option(False, "--no-log", help="Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."),
+) -> None:
+    """Run a workflow now (manual trigger) and follow it live, node by node.
+
+    Parameters keep the values saved in the workflow unless set with --param; any without a value are asked for. Ctrl+C cancels the run (press it again to detach). The logs are saved under <workspace>/logs/workflow/<run_id>/ when it ends.
+    """
+    if notify is not None and "@" not in notify:
+        typer.echo("✗ --notify needs an email address.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+    with _setup_errors(), render.run_activity(render.RunActivity("Looking up the workflow", "ctrl+c to cancel")):
+        wf = resources.resolve_workflow(client, ref)
+
+    specs = runner.workflow_params(wf.get("nodes"))
+    inputs, shown = _collect_workflow_inputs(specs, params or [])
+    payload = {"inputs": inputs, "send_email": bool(notify), "user_email": notify or ""}
+
+    try:
+        with render.run_activity(render.RunActivity("Starting the run", "")):
+            queued = resources.trigger_workflow_run(client, wf["id"], payload) or {}
+    except KeyboardInterrupt:
+        typer.echo("Interrupted — the run may already be queued. Check:  sagex list run", err=True)
+        raise typer.Exit(code=130)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    run_id = str(queued.get("workflow_run_id") or "")
+    if not run_id:
+        typer.echo("✗ The server didn't return a run id.")
+        raise typer.Exit(code=1)
+
+    nodes = wf.get("nodes") or []
+    render.workflow_run_header(wf.get("name") or ref, len(nodes), shown)
+    workspace = None if no_log else Path(config.workspace_dir())
+    raise typer.Exit(code=_follow_workflow_run(client, run_id, _node_index(nodes), workspace))
 
 
 def _check(raise_on_fail: bool) -> None:

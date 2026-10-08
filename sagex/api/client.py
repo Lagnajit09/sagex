@@ -15,6 +15,7 @@ from sagex import config
 from sagex.api import store
 
 _TIMEOUT = 15.0
+_WRITE_TIMEOUT = 60.0
 
 # Optional `factory(method) -> context manager` wrapped around each request; the
 # CLI installs one to show its activity line. None (e.g. in the TUI) = no indicator.
@@ -103,12 +104,26 @@ class ApiClient:
 
     def _request(self, method: str, path: str, params: dict | None = None, json=None):
         url = f"{self.base_url}{path}"
+        is_read = method.upper() == "GET"
         try:
             with waiting(method):
                 resp = httpx.request(
                     method, url, headers=self._headers(),
-                    params=params, json=json, timeout=_TIMEOUT,
+                    params=params, json=json,
+                    # Writes can be slow server-side (e.g. a script create uploads to storage).
+                    timeout=_TIMEOUT if is_read else _WRITE_TIMEOUT,
                 )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            raise ApiError(
+                f"Can't reach the backend at {self.base_url}. Is it running?"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            # The request reached the server, so a change may still have been applied.
+            raise ApiError(
+                "The server took too long to respond." if is_read else
+                "The server took too long to respond — the change may still have gone "
+                "through. Check before retrying."
+            ) from exc
         except httpx.RequestError as exc:
             raise ApiError(
                 f"Can't reach the backend at {self.base_url}. Is it running?"

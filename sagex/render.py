@@ -58,6 +58,54 @@ def run_header(script_name: str, server_name: str, details: list[str],
         err_console.print(shown, soft_wrap=True)
 
 
+def workflow_run_header(name: str, node_count: int, inputs: dict) -> None:
+    """'▶ Deploy Production · 4 nodes' plus the parameter values (secrets pre-masked)."""
+    line = Text()
+    line.append("▶ ", style="cyan")
+    line.append(name, style="bold")
+    line.append(f" · {node_count} node{'s' if node_count != 1 else ''}", style="bright_black")
+    err_console.print(line, soft_wrap=True)
+    if inputs:
+        shown = Text("  ")
+        for i, (label, value) in enumerate(inputs.items()):
+            if i:
+                shown.append("  ")
+            shown.append(f"{label}=", style="bright_black")
+            shown.append(value or '""')
+        err_console.print(shown, soft_wrap=True)
+
+
+def workflow_node_start(label: str, kind: str) -> None:
+    """'› Check service · script' — printed when a node begins."""
+    line = Text()
+    line.append("› ", style="cyan")
+    line.append(label, style="bold")
+    if kind:
+        line.append(f" · {kind}", style="bright_black")
+    err_console.print(line, soft_wrap=True)
+
+
+def workflow_node_done(label: str, status: str | None, exit_code=None, duration=None,
+                       branch: str | None = None) -> None:
+    """'✓ Check service · exit 0 · 2.3s' — printed when a node finishes."""
+    icon, color = STATUS_ICON.get(status or "", ("•", "white"))
+    parts = []
+    if status and status not in ("success", "failed"):
+        parts.append(status)
+    if branch:
+        parts.append(f"{branch} branch")
+    if exit_code is not None and exit_code != -1:
+        parts.append(f"exit {exit_code}")
+    if duration and status != "skipped":
+        parts.append(_elapsed(float(duration)))
+    line = Text()
+    line.append(f"{icon} ", style=color)
+    line.append(label, style=color if status == "failed" else "")
+    if parts:
+        line.append(" · " + " · ".join(parts), style="bright_black")
+    err_console.print(line, soft_wrap=True)
+
+
 def run_stdout(text: str) -> None:
     """A line of the script's stdout, written raw (no styling) so it pipes cleanly.
 
@@ -162,15 +210,16 @@ def _elapsed(seconds: float) -> str:
     return f"{int(seconds // 60)}m {int(seconds % 60)}s"
 
 
-def run_summary(status: str | None, exit_code, seconds: float, execution_id: str | None) -> None:
-    """'✓ completed · exit 0 · 3.4s · execution <id>'."""
+def run_summary(status: str | None, exit_code, seconds: float, execution_id: str | None,
+                noun: str = "execution") -> None:
+    """'✓ completed · exit 0 · 3.4s · execution <id>' (noun 'run' for workflows)."""
     icon, color = STATUS_ICON.get(status or "", ("•", "white"))
     parts = []
     if exit_code is not None and exit_code != -1:
         parts.append(f"exit {exit_code}")
     parts.append(_elapsed(seconds))
     if execution_id:
-        parts.append(f"execution {execution_id}")
+        parts.append(f"{noun} {execution_id}")
     line = Text()
     line.append(f"{icon} {status or 'unknown'}", style=f"bold {color}")
     line.append(" · " + " · ".join(parts), style="bright_black")
