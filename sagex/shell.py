@@ -159,6 +159,9 @@ class ShellSession:
             encoding="utf-8",           # decode child output as UTF-8, not the
             errors="replace",           # locale codepage (cp1252) — else box-drawing
             bufsize=1,                  # and other non-ASCII output turns to mojibake
+            # Ask any `sagex run workflow` launched here to also print structured
+            # progress lines, which the app turns into a live graph.
+            env={**os.environ, "SAGEX_EVENTS": "1"},
             **group_kwargs,
         )
         self._proc = proc               # expose it so cancel() can reach it

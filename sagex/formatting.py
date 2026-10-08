@@ -17,6 +17,12 @@ from rich.text import Text
 _PULSE = "·✢✶✻✽✻✶✢"
 _ACCENT = "#d77757"
 _ACCENT_HOT = "#f0b49a"
+ACCENT = _ACCENT
+
+
+def pulse_glyph(seconds: float) -> str:
+    """The activity pulse frame for `seconds` into an animation."""
+    return _PULSE[int(seconds * 8) % len(_PULSE)]
 
 
 class RunActivity:
@@ -36,7 +42,7 @@ class RunActivity:
     def __rich__(self) -> Text:
         t = time.monotonic() - self._start
         line = Text()
-        line.append(f"{_PULSE[int(t * 8) % len(_PULSE)]} ", style=_ACCENT)
+        line.append(f"{pulse_glyph(t)} ", style=_ACCENT)
         word = f"{self.verb}…"
         hot = int(t * 14) % (len(word) + 8) - 4
         for i, ch in enumerate(word):

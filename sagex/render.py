@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from rich.cells import cell_len
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -75,8 +75,16 @@ def workflow_run_header(name: str, node_count: int, inputs: dict) -> None:
         err_console.print(shown, soft_wrap=True)
 
 
+def workflow_run_graph(view) -> None:
+    """Print a run's final graph (its bordered panel) once, after a blank line."""
+    err_console.print()
+    err_console.print(view)
+
+
 def workflow_node_start(label: str, kind: str) -> None:
-    """'› Check service · script' — printed when a node begins."""
+    """'› Check service · script' — printed when a node begins, after a blank line
+    so each node's output reads as its own section."""
+    err_console.print()
     line = Text()
     line.append("› ", style="cyan")
     line.append(label, style="bold")
@@ -131,17 +139,29 @@ _wait_ended = 0.0
 _WAIT_VERBS = {"GET": "Loading", "DELETE": "Deleting"}
 
 
-def _activity_live(activity: RunActivity) -> Live:
+def _activity_live(renderable) -> Live:
     # Live's default stdout redirect would push piped output into stderr; output is
     # routed explicitly instead (see run_stdout()).
-    return Live(activity, console=err_console, refresh_per_second=12, transient=True,
+    return Live(renderable, console=err_console, refresh_per_second=12, transient=True,
                 redirect_stdout=False, redirect_stderr=False)
 
 
+class _Pinned:
+    """A block (e.g. the live workflow graph) pinned above the activity line."""
+
+    def __init__(self, above, activity: RunActivity) -> None:
+        self.above, self.activity = above, activity
+
+    def __rich__(self):
+        # A blank line sets the pinned block off from the log scrolling above it.
+        return Group(Text(""), self.above, self.activity)
+
+
 @contextmanager
-def run_activity(activity: RunActivity):
+def run_activity(activity: RunActivity, above=None):
     """Show `activity` on stderr while the block runs (no-op when stderr isn't a
-    terminal). The line is cleared on exit so the summary prints in its place."""
+    terminal), with `above` (re-rendered every frame) pinned over it. Output printed
+    meanwhile scrolls above the live region, which is cleared on exit."""
     global _stdout_through_live, _explicit_active
     if not err_console.is_terminal:
         yield
@@ -150,7 +170,7 @@ def run_activity(activity: RunActivity):
         _explicit_active = True
     _stdout_through_live = sys.stdout.isatty()
     try:
-        with _activity_live(activity):
+        with _activity_live(_Pinned(above, activity) if above is not None else activity):
             yield
     finally:
         _stdout_through_live = False

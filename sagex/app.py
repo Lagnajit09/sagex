@@ -11,11 +11,12 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 
-from sagex import config, shell
+from sagex import config, runview, shell
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import run_label, trigger_label
 from sagex.widgets.activity import ActivityLine
 from sagex.widgets.message import ChatMessage
+from sagex.widgets.run_graph import RunGraph
 from sagex.widgets.prompt_input import PromptInput
 
 
@@ -37,6 +38,7 @@ class SagexApp(App):
         self.config = config.load()                       # persisted settings (~/.sagex)
         self.session = shell.ShellSession(preferred=self.config.get("shell"))
         self._busy = False                                # is a command currently running?
+        self._run_graph: RunGraph | None = None           # live graph of the running command
         self._load_gen = 0                                # bumps on every (re)load
         self._pending_loads: set = set()                  # branches still loading (this gen)
 
@@ -167,6 +169,10 @@ class SagexApp(App):
 
         def on_line(line: str) -> None:
             nonlocal got_output
+            event = runview.parse_event_line(line)      # progress from `sagex run workflow`
+            if event is not None:
+                self.call_from_thread(self._on_run_event, out, event)
+                return
             got_output = True
             self.call_from_thread(self._append_output, out, line)
 
@@ -186,6 +192,15 @@ class SagexApp(App):
         widget = ChatMessage("", "cmd_output")
         self.query_one("#chat-log", VerticalScroll).mount(widget)
         return widget
+
+    def _on_run_event(self, out: ChatMessage, event: dict) -> None:
+        """(main thread) Create, then update, the live graph of a workflow run."""
+        if event.get("t") == "start":
+            view = runview.WorkflowRunView.from_snapshot(event.get("view") or {})
+            self._run_graph = RunGraph(view)
+            self.query_one("#chat-log", VerticalScroll).mount(self._run_graph, before=out)
+        elif self._run_graph is not None:
+            self._run_graph.apply(event)
 
     def _append_output(self, widget: ChatMessage, line: str) -> None:
         """(main thread) Append a line to an output block and scroll to it."""
@@ -208,6 +223,9 @@ class SagexApp(App):
         """(main thread) Called when a command finishes — clear the busy flag."""
         self._busy = False
         self.query_one("#command-activity", ActivityLine).stop()
+        if self._run_graph is not None:  # e.g. detached or crashed before a final event
+            self._run_graph.freeze()
+            self._run_graph = None
         self._refresh_prompt()           # the working dir may have changed
 
     def action_cycle_shell(self) -> None:

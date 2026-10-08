@@ -10,6 +10,7 @@ otherwise the matching `auth` command runs as a plain CLI action.
 """
 
 import json
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -27,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from sagex import __version__, config, copier, pusher, render, runner
+from sagex import __version__, config, copier, pusher, render, runner, runview
 from sagex.api import ApiError, build_client, resources
 from sagex.api import store
 from sagex.api.client import set_wait_indicator
@@ -2167,16 +2168,12 @@ def run_script_cmd(
 _RUN_FINISHED = ("success", "failed", "cancelled")
 
 
-def _node_index(nodes: list) -> dict:
-    """node_id -> (label, kind) where kind is trigger/script/email/decision."""
-    index = {}
-    for n in nodes or []:
-        data = n.get("data") if isinstance(n.get("data"), dict) else {}
-        kind = n.get("type") or ""
-        if kind == "action":
-            kind = data.get("type") or "action"
-        index[n.get("id")] = (data.get("label") or n.get("id") or "node", kind)
-    return index
+def _emit_run_event(view: "runview.WorkflowRunView", event: dict) -> None:
+    """Apply a run update to the live graph; under the TUI (SAGEX_EVENTS=1) also print
+    it as an event line so the TUI can draw the same graph."""
+    view.apply(event)
+    if os.environ.get("SAGEX_EVENTS") == "1":
+        print(runview.event_line(event), file=sys.stderr, flush=True)
 
 
 def _collect_workflow_inputs(specs: list[dict], raw: list[str]) -> tuple[dict, dict]:
@@ -2249,8 +2246,9 @@ def _collect_workflow_inputs(specs: list[dict], raw: list[str]) -> tuple[dict, d
     return inputs, shown
 
 
-def _show_workflow_frame(frame, state: dict, node_index: dict) -> bool:
-    """Print one live-run frame and track the run; False once it reports 'done'."""
+def _show_workflow_frame(frame, state: dict, view: "runview.WorkflowRunView") -> bool:
+    """Apply one live-run frame to the graph, print its output to the scrolling log,
+    and track the run; False once it reports 'done'."""
     event, data = frame
     if not isinstance(data, dict):
         data = {"data": data}
@@ -2258,23 +2256,26 @@ def _show_workflow_frame(frame, state: dict, node_index: dict) -> bool:
         state["status"] = data.get("status") or state["status"]
         if data.get("error_message"):
             state["error"] = data["error_message"]
+        _emit_run_event(view, {"t": "run", "status": state["status"]})
     elif event == "node_start":
-        label, kind = node_index.get(data.get("node_id"), (data.get("node_id") or "node", ""))
-        label = data.get("node_label") or label
+        node_id = data.get("node_id")
+        label = data.get("node_label") or view.label(node_id)
         state["current"] = label
         if state["status"] == "queued":
             state["status"] = "running"           # the 'running' status may have streamed early
-        if kind != "trigger":
-            render.workflow_node_start(label, kind)
+        _emit_run_event(view, {"t": "node", "id": node_id, "status": "running"})
+        # The trigger finishes instantly and usually streams before we connect, so
+        # it gets no log lines either way (the graph still shows it done).
+        if view.kind(node_id) != "trigger":
+            render.workflow_node_start(label, view.kind(node_id))
     elif event == "node_complete":
         node_id = data.get("node_id")
-        state["seen"].add(node_id)
-        label, kind = node_index.get(node_id, (node_id or "node", ""))
-        # The trigger finishes instantly and usually streams before we connect, so
-        # it's never shown (keeps the output the same either way).
-        if kind != "trigger":
-            branch = data.get("taken_branch") if "decision_result" in data else None
-            render.workflow_node_done(data.get("node_label") or label, data.get("status"),
+        branch = data.get("taken_branch") if "decision_result" in data else None
+        _emit_run_event(view, {"t": "node", "id": node_id, "status": data.get("status"),
+                               "exit_code": data.get("exit_code"), "duration": data.get("duration"),
+                               "branch": branch})
+        if view.kind(node_id) != "trigger":
+            render.workflow_node_done(data.get("node_label") or view.label(node_id), data.get("status"),
                                       data.get("exit_code"), data.get("duration"), branch)
     elif event == "log":
         kind, text = runner.classify_log_line(str(data.get("stdout") or data.get("data") or ""))
@@ -2288,11 +2289,12 @@ def _show_workflow_frame(frame, state: dict, node_index: dict) -> bool:
     elif event == "done":
         if data.get("status") in _RUN_FINISHED:
             state["status"] = data["status"]
+            _emit_run_event(view, {"t": "run", "status": state["status"]})
         return False
     return True
 
 
-def _pump_workflow_stream(client, run_id: str, state: dict, node_index: dict,
+def _pump_workflow_stream(client, run_id: str, state: dict, view: "runview.WorkflowRunView",
                           activity: "render.RunActivity") -> bool:
     """Show one stream connection's frames; True if it ended with the run finished.
 
@@ -2311,7 +2313,7 @@ def _pump_workflow_stream(client, run_id: str, state: dict, node_index: dict,
             state["stream"] = None
             return False                          # ended early (dropped / 30-min cap)
         state["errors"] = 0
-        if not _show_workflow_frame(frame, state, node_index):
+        if not _show_workflow_frame(frame, state, view):
             state["stream"] = None
             return state["status"] in _RUN_FINISHED
         if state["status"] == "running":
@@ -2325,21 +2327,24 @@ def _iso_seconds(start: str | None, end: str | None) -> float | None:
         return None
 
 
-def _follow_workflow_run(client, run_id: str, node_index: dict, workspace: Path | None) -> int:
+def _follow_workflow_run(client, run_id: str, view: "runview.WorkflowRunView",
+                         workspace: Path | None) -> int:
     """Follow a workflow run live until it ends; return the CLI exit code.
 
-    The stream is live-only, so it reconnects if it ends early and the run's node
-    records are checked at the end (covering anything that streamed before we
-    connected). Ctrl+C cancels the run; a second Ctrl+C detaches.
+    On a terminal, the run's graph stays pinned at the bottom and updates as nodes
+    start and finish, while their output scrolls above it. The stream is live-only,
+    so it reconnects if it ends early, and the run's node records are applied at the
+    end (covering anything that streamed before we connected). Ctrl+C cancels the
+    run; a second Ctrl+C detaches.
     """
-    state = {"status": "queued", "error": "", "seen": set(), "current": "", "errors": 0, "stream": None}
+    state = {"status": "queued", "error": "", "current": "", "errors": 0, "stream": None}
     activity = render.RunActivity("Queued — waiting for a worker", "ctrl+c to cancel")
     started = time.monotonic()
     cancel_tried = detached = lost = False
-    with render.run_activity(activity):
+    with render.run_activity(activity, above=view):
         while True:
             try:
-                if _pump_workflow_stream(client, run_id, state, node_index, activity):
+                if _pump_workflow_stream(client, run_id, state, view, activity):
                     break
                 run = resources.get_workflow_run(client, run_id)     # did it finish meanwhile?
                 if run.get("status") in _RUN_FINISHED:
@@ -2376,7 +2381,8 @@ def _follow_workflow_run(client, run_id: str, node_index: dict, workspace: Path 
         render.run_note(f"{why} (run {run_id}). Check it later:  sagex show run {run_id}")
         return 130 if detached else 1
 
-    # Reconcile with the run's records, then save the logs from the server's copies.
+    # Apply the run's node records (the authoritative final state), show the final
+    # graph, then save the logs from the server's copies.
     run, nodes = {"id": run_id, "status": state["status"]}, None
     try:
         with render.run_activity(render.RunActivity("Collecting the results", "")):
@@ -2387,15 +2393,16 @@ def _follow_workflow_run(client, run_id: str, node_index: dict, workspace: Path 
     except (ApiError, KeyboardInterrupt) as exc:
         render.run_note(f"Couldn't fetch the run's final results: {getattr(exc, 'message', 'interrupted')}")
 
-    for n in sorted(nodes or [], key=lambda x: x.get("execution_order") or 0):
-        node_id = n.get("node_id")
-        label, kind = node_index.get(node_id, (n.get("node_label") or node_id, ""))
-        if node_id in state["seen"] or kind == "trigger" or n.get("status") in (None, "pending", "running"):
-            continue
-        render.workflow_node_done(n.get("node_label") or label, n.get("status"), n.get("exit_code"),
-                                  _iso_seconds(n.get("started_at"), n.get("finished_at")))
-
+    for n in nodes or []:
+        if n.get("status"):
+            _emit_run_event(view, {"t": "node", "id": n.get("node_id"), "status": n["status"],
+                                   "exit_code": n.get("exit_code"),
+                                   "duration": _iso_seconds(n.get("started_at"), n.get("finished_at"))})
     status = run.get("status") or state["status"]
+    _emit_run_event(view, {"t": "run", "status": status})
+    if os.environ.get("SAGEX_EVENTS") != "1":       # the TUI draws its own final graph
+        render.workflow_run_graph(view)
+
     if status == "failed" and (run.get("error_message") or state["error"]):
         render.run_stderr(run.get("error_message") or state["error"])
     total = _iso_seconds(run.get("started_at"), run.get("finished_at")) or seconds
@@ -2452,10 +2459,13 @@ def run_workflow_cmd(
         typer.echo("✗ The server didn't return a run id.")
         raise typer.Exit(code=1)
 
-    nodes = wf.get("nodes") or []
-    render.workflow_run_header(wf.get("name") or ref, len(nodes), shown)
+    view = runview.WorkflowRunView.from_workflow(wf)
+    render.workflow_run_header(wf.get("name") or ref, len(view.order), shown)
+    if os.environ.get("SAGEX_EVENTS") == "1":
+        print(runview.event_line({"t": "start", "run_id": run_id, "view": view.snapshot()}),
+              file=sys.stderr, flush=True)
     workspace = None if no_log else Path(config.workspace_dir())
-    raise typer.Exit(code=_follow_workflow_run(client, run_id, _node_index(nodes), workspace))
+    raise typer.Exit(code=_follow_workflow_run(client, run_id, view, workspace))
 
 
 def _check(raise_on_fail: bool) -> None:
