@@ -36,10 +36,11 @@ def waiting(method: str):
 class ApiError(Exception):
     """A failed API call, carrying a message suitable for showing the user."""
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, errors=None) -> None:
         super().__init__(message)
         self.message = message
         self.status = status
+        self.errors = errors            # the envelope's `errors` (e.g. a code, candidates)
 
 
 class ApiClient:
@@ -49,9 +50,9 @@ class ApiClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
 
-    def get(self, path: str, params: dict | None = None):
+    def get(self, path: str, params: dict | None = None, headers: dict | None = None):
         """GET `path` (e.g. '/api/workflows/') and return the envelope's `data`."""
-        return self._request("GET", path, params=params)
+        return self._request("GET", path, params=params, headers=headers)
 
     def post(self, path: str, json=None, headers: dict | None = None):
         """POST `json` to `path` (create) and return the envelope's `data`."""
@@ -142,7 +143,9 @@ class ApiClient:
             raise ApiError("Not authenticated — API key missing or invalid.", status=401)
         if resp.status_code >= 400:
             message = body.get("message") if isinstance(body, dict) else None
-            raise ApiError(message or f"Request failed ({resp.status_code}).", status=resp.status_code)
+            errors = body.get("errors") if isinstance(body, dict) else None
+            raise ApiError(message or f"Request failed ({resp.status_code}).",
+                           status=resp.status_code, errors=errors)
 
         if isinstance(body, dict) and "data" in body:
             return body["data"]

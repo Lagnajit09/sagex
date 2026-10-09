@@ -404,6 +404,44 @@ def fire_http_trigger(client: ApiClient, path: str, secret: str, idempotency_key
     })
 
 
+def http_trigger_poll_path(url: str) -> tuple[str, str] | None:
+    """(path, run_id) from a polling URL (…/triggers/http/<token>/runs/<run_id>/), or
+    None. As with firing, only the path is used — the host is whatever Django saw."""
+    marker = "/api/execution-engine/triggers/http/"
+    if marker not in url:
+        return None
+    parts = url.split(marker, 1)[1].split("?")[0].strip("/").split("/")
+    if len(parts) < 3 or parts[1] != "runs" or not parts[0] or not parts[2]:
+        return None
+    return f"{marker}{parts[0]}/runs/{parts[2]}/", parts[2]
+
+
+def resolve_http_trigger_run(client: ApiClient, ref: str, run: str | None = None) -> dict:
+    """One owner-only call: a workflow name, trigger id or run id (or the start of one)
+    → the HTTP trigger run to poll. `ref` alone means: a run → the trigger that started
+    it; a trigger/workflow → its latest webhook run. With `run`, ref names the trigger.
+
+    Returns {trigger, run, polling_path, workflow (graph shape only)}. Raises
+    AmbiguousResource when a name or prefix matches several; other failures raise
+    ApiError whose `errors["code"]` says why (not_webhook_run, no_runs_yet, …).
+    """
+    params = {"ref": ref, **({"run": run} if run else {})}
+    try:
+        return client.get("/api/triggers/http/resolve/", params=params)
+    except ApiError as exc:
+        errors = exc.errors if isinstance(exc.errors, dict) else {}
+        if exc.status == 409 and errors.get("matches"):
+            raise AmbiguousResource(errors.get("kind") or "match", run or ref, errors["matches"])
+        raise
+
+
+def poll_http_trigger_run(client: ApiClient, path: str, secret: str) -> dict:
+    """Read a run through the trigger's public polling endpoint, as a webhook caller
+    would (trigger secret only, no API key). Returns {workflow_run_id, status,
+    error_message, started_at, finished_at, nodes: [...]} — no logs."""
+    return ApiClient(client.base_url, None).get(path, headers={"X-Trigger-Secret": secret})
+
+
 def update_workflow_nodes(client: ApiClient, workflow_id, nodes: list) -> dict:
     """Replace a workflow's nodes via a partial PATCH (edges and name untouched)."""
     return client.patch(f"/api/workflows/{workflow_id}/", json={"nodes": nodes})

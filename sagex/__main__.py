@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -2592,11 +2592,152 @@ def trigger_fire_cmd(
         what = "Run" if queued.get("idempotent") else "Queued run"
         typer.echo(f"✓ {what} {run_id} via the HTTP trigger (Idempotency-Key {key}).")
         if queued.get("polling_url"):
-            typer.echo(f"  Poll it with the trigger secret:  GET {queued['polling_url']}")
-        typer.echo(f"  Or check it here:  sagex show run {run_id}")
+            typer.echo(f"  Polling URL (GET with X-Trigger-Secret):  {queued['polling_url']}")
+        typer.echo(f"  Poll it from here:  sagex trigger poll {run_id} --watch")
         return
     raise typer.Exit(code=_watch_new_run(client, wf, run_id, shown, no_log,
                                          via=f"via HTTP trigger · Idempotency-Key {key}"))
+
+
+def _graph_for_run(client, run_id: str) -> dict | None:
+    """The graph shape of a webhook run's workflow (best effort; None if unavailable)."""
+    try:
+        return resources.resolve_http_trigger_run(client, run_id).get("workflow")
+    except (ApiError, resources.AmbiguousResource, AttributeError):
+        return None
+
+
+def _find_trigger_run(client, target: str, run_ref: str | None) -> dict:
+    """One server lookup for `trigger poll`: the trigger run named by TARGET (+ RUN).
+    Exits with a hint when it can't be found."""
+    try:
+        with render.run_activity(render.RunActivity("Finding the run", "ctrl+c to cancel")):
+            return resources.resolve_http_trigger_run(client, target, run_ref)
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130)
+    except resources.AmbiguousResource as exc:
+        render.ambiguous(exc)
+        raise typer.Exit(code=1)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        code = exc.errors.get("code") if isinstance(exc.errors, dict) else None
+        hint = {
+            "not_webhook_run": f"  See it with:  sagex show run {target}",
+            "no_runs_yet": f"  Fire it:  sagex trigger fire \"{target}\"",
+            "run_not_found": f"  Only runs this webhook started can be polled. See it with:  sagex show run {run_ref}",
+            "trigger_not_found": "  See your triggers:  sagex list trigger",
+            "not_found": "  See your triggers:  sagex list trigger",
+        }.get(code)
+        if hint is None and exc.status == 404:
+            hint = "  Your server may predate this lookup — update it, or pass the full polling URL."
+        if hint:
+            typer.echo(hint)
+        raise typer.Exit(code=1)
+
+
+def _apply_poll(view: "runview.WorkflowRunView", data: dict) -> None:
+    """Apply a polling response (node records + run status) to the graph."""
+    now = datetime.now(timezone.utc).isoformat()
+    for n in data.get("nodes") or []:
+        if n.get("status"):
+            event = {"t": "node", "id": n.get("node_id"), "status": n["status"],
+                     "exit_code": n.get("exit_code"),
+                     "duration": _iso_seconds(n.get("started_at"), n.get("finished_at"))}
+            if n["status"] == "running":
+                event["elapsed"] = _iso_seconds(n.get("started_at"), now)
+            _emit_run_event(view, event)
+    _emit_run_event(view, {"t": "run", "status": data.get("status")})
+
+
+@trigger_app.command("poll")
+def trigger_poll_cmd(
+    target: str = typer.Argument(..., help="A run id (or its first few characters), a trigger id / workflow name (= its latest run), or a polling URL."),
+    run_ref: str = typer.Argument(None, metavar="[RUN]", help="A run id, when TARGET is a trigger or workflow."),
+    secret_file: str = typer.Option(None, "--secret-file", help="Read the trigger secret from this file instead of a hidden prompt."),
+    watch: bool = typer.Option(False, "--watch", "-w", help="Keep polling until the run finishes."),
+    interval: float = typer.Option(3.0, "--interval", help="Seconds between polls with --watch (minimum 2)."),
+) -> None:
+    """Check a run through its HTTP trigger's polling URL — exactly what a webhook caller sees.
+
+    Pass a run id (as `trigger fire` prints), a trigger id or workflow name for its latest webhook run, or the full polling URL. Polls with only the trigger secret (no API key), typed at a hidden prompt or read from --secret-file. Shows the run as a graph, once, or live with --watch. Ctrl+C stops watching; the run carries on.
+    """
+    client = _client_or_exit()
+    parsed = resources.http_trigger_poll_path(target)
+    if parsed and run_ref:
+        typer.echo("✗ The polling URL already names the run — drop the extra run id.")
+        raise typer.Exit(code=1)
+    found = None if parsed else _find_trigger_run(client, target, run_ref)   # one lookup
+    path, run_id = parsed if parsed else (found["polling_path"], str(found["run"]["id"]))
+
+    secret = _read_trigger_secret(secret_file)
+    try:
+        with render.run_activity(render.RunActivity("Checking the run", "")):
+            if found:
+                (data,) = runner.fetch_parallel(lambda: resources.poll_http_trigger_run(client, path, secret))
+                wf = found.get("workflow")
+            else:   # from a URL: fetch the graph shape alongside the poll
+                data, wf = runner.fetch_parallel(
+                    lambda: resources.poll_http_trigger_run(client, path, secret),
+                    lambda: _graph_for_run(client, run_id),
+                )
+    except KeyboardInterrupt:
+        raise typer.Exit(code=130)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        if exc.status == 404:
+            typer.echo(f"  Only runs this webhook started can be polled. See it with:  sagex show run {run_id}")
+        raise typer.Exit(code=1)
+
+    data = data or {}
+    if wf:
+        view = runview.WorkflowRunView.from_workflow(wf)
+    else:   # no access to the workflow's shape: show the polled nodes as a flat list
+        records = sorted(data.get("nodes") or [], key=lambda n: n.get("execution_order") or 0)
+        view = runview.WorkflowRunView(f"Run {run_id}", [
+            {"id": n.get("node_id"), "label": n.get("node_label") or n.get("node_id"), "kind": ""}
+            for n in records], [])
+    if os.environ.get("SAGEX_EVENTS") == "1":
+        print(runview.event_line({"t": "start", "run_id": run_id, "view": view.snapshot()}),
+              file=sys.stderr, flush=True)
+    _apply_poll(view, data)
+
+    stopped = False
+    if watch and not view.finished:
+        interval = max(interval, 2.0)
+        activity = render.RunActivity("Polling", f"every {interval:g}s · ctrl+c to stop watching")
+        errors = 0
+        with render.run_activity(activity, above=view):
+            while not view.finished:
+                try:
+                    time.sleep(interval)
+                    data = resources.poll_http_trigger_run(client, path, secret) or {}
+                    errors = 0
+                    _apply_poll(view, data)
+                except KeyboardInterrupt:
+                    stopped = True
+                    break
+                except ApiError as exc:
+                    errors += 1
+                    render.run_stderr(f"✗ {exc.message}")
+                    if errors >= 3:
+                        break
+
+    if os.environ.get("SAGEX_EVENTS") != "1":       # the TUI draws its own graph
+        render.workflow_run_graph(view)
+    if view.finished:
+        if view.status == "failed" and data.get("error_message"):
+            render.run_stderr(data["error_message"])
+        total = _iso_seconds(data.get("started_at"), data.get("finished_at")) or 0.0
+        render.run_summary(view.status, None, total, run_id, noun="run")
+    else:
+        why = "Stopped watching — the run carries on" if stopped else f"Still {view.status}"
+        hint = "" if watch and not stopped else f"  ·  watch it:  sagex trigger poll {run_id} --watch"
+        render.run_note(f"{why} (run {run_id}).{hint}")
+
+    if stopped:
+        raise typer.Exit(code=130)
+    if watch:
+        raise typer.Exit(code=0 if view.status == "success" else 1)
 
 
 def _check(raise_on_fail: bool) -> None:

@@ -4,7 +4,8 @@ Shared by the CLI (a pinned Rich Live region) and the TUI (a widget fed by event
 lines the CLI prints when SAGEX_EVENTS=1), so both show the same picture. Every
 change goes through `apply(event)`:
 
-    {"t": "node", "id": ..., "status": ..., "exit_code": ..., "duration": ..., "branch": ...}
+    {"t": "node", "id": ..., "status": ..., "exit_code": ..., "duration": ..., "branch": ...,
+     "elapsed": <seconds a running node has already run, optional>}
     {"t": "run", "status": ...}
 
 The TUI first receives {"t": "start", "view": <snapshot()>} to build its copy.
@@ -43,9 +44,20 @@ def parse_event_line(line: str) -> dict | None:
 
 
 def _elapsed(seconds: float) -> str:
+    """'2.3s', '4m 05s', '7h 10m' — a finished node's duration."""
     if seconds < 60:
         return f"{seconds:.1f}s"
-    return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+    return _clock(seconds)
+
+
+def _clock(seconds: float) -> str:
+    """'12s', '4m 05s', '7h 10m' — whole seconds, for a node that's still running."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60:02d}s"
+    return f"{s // 3600}h {s % 3600 // 60:02d}m"
 
 
 class WorkflowRunView:
@@ -111,8 +123,9 @@ class WorkflowRunView:
             if st is None:
                 return
             status = event.get("status") or st["status"]
-            if status == "running" and st["status"] != "running":
-                st["since"] = time.monotonic()
+            if status == "running" and (st["status"] != "running" or event.get("elapsed") is not None):
+                # `elapsed` (seconds already spent running) comes from polled records.
+                st["since"] = time.monotonic() - max(float(event.get("elapsed") or 0), 0.0)
             st["status"] = status
             for key in ("exit_code", "duration", "branch"):
                 if event.get(key) is not None:
@@ -210,7 +223,7 @@ class WorkflowRunView:
             since = time.monotonic() - st.get("since", time.monotonic())
             head.append(f"{pulse_glyph(since)} ", style=ACCENT)
             head.append(label, style="bold")
-            details.append(f"running {int(since)}s")
+            details.append(f"running {_clock(since)}")
         elif status == "pending":
             head.append(f"{_KIND_ICON.get(self.kind(node_id), '•')} ", style="bright_black")
             head.append(label, style="bright_black")
