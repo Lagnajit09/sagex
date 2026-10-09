@@ -379,6 +379,36 @@ def upsert_schedule_trigger(client: ApiClient, workflow_id, node_id: str, cron: 
     )
 
 
+def http_trigger_path(trigger: dict) -> str | None:
+    """The webhook's path (/api/execution-engine/triggers/http/<token>/) from a
+    trigger record's `trigger_url`. The URL's host is whatever the server saw, so
+    callers join this path onto their own base URL instead."""
+    url = str(trigger.get("trigger_url") or "")
+    marker = "/api/execution-engine/triggers/http/"
+    if marker not in url:
+        return None
+    token = url.split(marker, 1)[1].strip("/").split("/")[0]
+    return f"{marker}{token}/" if token else None
+
+
+def fire_http_trigger(client: ApiClient, path: str, secret: str, idempotency_key: str,
+                      inputs: dict) -> dict:
+    """Call an HTTP trigger exactly as an outside caller would: no API key, just the
+    trigger secret + an Idempotency-Key. Returns {workflow_run_id, status,
+    idempotent, polling_url}; a reused key returns the original run (idempotent=True).
+    """
+    caller = ApiClient(client.base_url, None)
+    return caller.post(path, json={"inputs": inputs}, headers={
+        "X-Trigger-Secret": secret,
+        "Idempotency-Key": idempotency_key,
+    })
+
+
+def update_workflow_nodes(client: ApiClient, workflow_id, nodes: list) -> dict:
+    """Replace a workflow's nodes via a partial PATCH (edges and name untouched)."""
+    return client.patch(f"/api/workflows/{workflow_id}/", json={"nodes": nodes})
+
+
 def set_trigger_active(client: ApiClient, kind: str, trigger_id, is_active: bool) -> dict:
     """Enable/disable a trigger via the global endpoint. `kind` is 'http' or 'schedule'."""
     return client.patch(f"/api/triggers/{kind}/{trigger_id}/", json={"is_active": is_active})

@@ -58,12 +58,15 @@ def run_header(script_name: str, server_name: str, details: list[str],
         err_console.print(shown, soft_wrap=True)
 
 
-def workflow_run_header(name: str, node_count: int, inputs: dict) -> None:
-    """'▶ Deploy Production · 4 nodes' plus the parameter values (secrets pre-masked)."""
+def workflow_run_header(name: str, node_count: int, inputs: dict, via: str | None = None) -> None:
+    """'▶ Deploy Production · 4 nodes' (+ how it was started) and the parameter values
+    (secrets pre-masked)."""
     line = Text()
     line.append("▶ ", style="cyan")
     line.append(name, style="bold")
     line.append(f" · {node_count} node{'s' if node_count != 1 else ''}", style="bright_black")
+    if via:
+        line.append(f" · {via}", style="bright_black")
     err_console.print(line, soft_wrap=True)
     if inputs:
         shown = Text("  ")
@@ -667,6 +670,7 @@ def http_trigger_result(data: dict) -> None:
         console.print(Text("Secret — shown once, copy it now (it can't be retrieved again):", style="bold red"))
         console.print(Text(f"  {secret}", style="bold"))
     _http_invocation(data.get("trigger_url"), secret or f"<your secret, ends ••••{data.get('secret_last4')}>")
+    note(f"Try it from here:  sagex trigger fire {_quoted(data.get('workflow_name'))}")
 
 
 def http_trigger_invocation(data: dict) -> None:
@@ -675,6 +679,11 @@ def http_trigger_invocation(data: dict) -> None:
         note("This trigger is disabled — enable it before calling:  sagex trigger enable …")
     _http_invocation(data.get("trigger_url"), f"<your secret, ends ••••{data.get('secret_last4')}>")
     note("The secret is stored hashed and can't be shown. Lost it? Run:  sagex trigger regenerate …")
+    note(f"Try it from here:  sagex trigger fire {_quoted(data.get('workflow_name'))}")
+
+
+def _quoted(name: str | None) -> str:
+    return f'"{name}"' if name else "<workflow>"
 
 
 def describe_cron(expr: str) -> str | None:

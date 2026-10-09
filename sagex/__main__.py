@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -1467,15 +1468,56 @@ def _pick_trigger_node(wf: dict, dtype: str, node_opt: str | None) -> str:
     return nodes[0].get("id")
 
 
+_TRIGGER_LABELS = {"http": "HTTP Trigger", "schedule": "Schedule Trigger"}
+
+
+def _offer_trigger_switch(client, wf: dict, dtype: str, yes: bool) -> dict:
+    """A workflow has exactly one trigger node. If it's a manual one, offer to make it
+    a <dtype> trigger (on-demand runs keep working); returns the updated workflow."""
+    triggers = [n for n in wf.get("nodes") or [] if n.get("type") == "trigger"]
+    if len(triggers) != 1:
+        return wf                                # _pick_trigger_node explains the problem
+    node = triggers[0]
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    current = data.get("type") or "manual"
+    if current != "manual":
+        typer.echo(f"✗ Workflow '{wf.get('name')}' uses a {current} trigger node, and a workflow has only one.")
+        typer.echo(f"  To switch, remove that trigger (sagex delete trigger \"{wf.get('name')}\"), then set the")
+        typer.echo(f"  node's data.type to '{dtype}' in the workflow file and push it.")
+        raise typer.Exit(code=1)
+
+    kind = "an HTTP webhook" if dtype == "http" else "a schedule"
+    typer.echo(f"Workflow '{wf.get('name')}' has a manual trigger. It can be switched to {kind};")
+    typer.echo("  on-demand runs (sagex run workflow) keep working either way.")
+    if not yes and not typer.confirm("  Switch the trigger node?"):
+        typer.echo("Aborted — nothing changed.")
+        raise typer.Exit(code=1)
+
+    new_data = {**data, "type": dtype}
+    if data.get("label") in (None, "", "Trigger", "Manual Trigger"):
+        new_data["label"] = _TRIGGER_LABELS[dtype]
+    nodes = [{**n, "data": new_data} if n is node else n for n in wf["nodes"]]
+    try:
+        resources.update_workflow_nodes(client, wf["id"], nodes)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Switched the trigger node to {dtype}.")
+    return {**wf, "nodes": nodes}
+
+
 @trigger_app.command("create")
 def trigger_create_cmd(
     workflow: str = typer.Argument(..., help="Workflow name or id."),
     type_: str = typer.Option(..., "--type", "-t", help="Trigger type: http or schedule."),
     cron: str = typer.Option(None, "--cron", help="Cron expression (5 fields, UTC) — required for schedule."),
     node: str = typer.Option(None, "--node", help="Trigger node id (auto-detected if the workflow has exactly one)."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the secret-rotation confirmation (http)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmations (switching a manual trigger node, rotating an HTTP secret)."),
 ) -> None:
-    """Create or update a workflow trigger. HTTP prints its secret once + how to call it."""
+    """Create or update a workflow trigger. HTTP prints its secret once + how to call it.
+
+    If the workflow's trigger node is manual, this offers to switch it to the requested type first.
+    """
     ttype = type_.lower()
     if ttype not in ("http", "schedule"):
         typer.echo("✗ --type must be 'http' or 'schedule'.")
@@ -1493,6 +1535,8 @@ def trigger_create_cmd(
 
     client = _client_or_exit()
     wf = _resolve_or_exit(resources.resolve_workflow, client, workflow, "workflow")
+    if not node and not resources.find_trigger_nodes(wf, ttype):
+        wf = _offer_trigger_switch(client, wf, ttype, yes)
     node_id = _pick_trigger_node(wf, ttype, node)
 
     if ttype == "http":
@@ -2459,13 +2503,100 @@ def run_workflow_cmd(
         typer.echo("✗ The server didn't return a run id.")
         raise typer.Exit(code=1)
 
+    raise typer.Exit(code=_watch_new_run(client, wf, run_id, shown, no_log))
+
+
+def _watch_new_run(client, wf: dict, run_id: str, shown: dict, no_log: bool,
+                   via: str | None = None) -> int:
+    """Print the run header, then follow the run live; returns the CLI exit code."""
     view = runview.WorkflowRunView.from_workflow(wf)
-    render.workflow_run_header(wf.get("name") or ref, len(view.order), shown)
+    render.workflow_run_header(wf.get("name") or "(workflow)", len(view.order), shown, via)
     if os.environ.get("SAGEX_EVENTS") == "1":
         print(runview.event_line({"t": "start", "run_id": run_id, "view": view.snapshot()}),
               file=sys.stderr, flush=True)
     workspace = None if no_log else Path(config.workspace_dir())
-    raise typer.Exit(code=_follow_workflow_run(client, run_id, view, workspace))
+    return _follow_workflow_run(client, run_id, view, workspace)
+
+
+def _read_trigger_secret(secret_file: str | None) -> str:
+    """The HTTP trigger secret: from --secret-file, else a hidden prompt. Never a flag
+    (shell history / process list) and never stored."""
+    if secret_file:
+        secret = _read_secret_file(secret_file).strip()
+    elif sys.stdin.isatty() and sys.stderr.isatty():
+        secret = typer.prompt("Trigger secret", hide_input=True, err=True).strip()
+    else:
+        typer.echo("✗ The trigger secret is typed at a hidden prompt — run this in a terminal, or pass --secret-file <path>.")
+        raise typer.Exit(code=1)
+    if not secret:
+        typer.echo("✗ The trigger secret is empty.")
+        raise typer.Exit(code=1)
+    return secret
+
+
+@trigger_app.command("fire")
+def trigger_fire_cmd(
+    ref: str = typer.Argument(..., help="Workflow name, or trigger id."),
+    params: list[str] = typer.Option(None, "--param", "-p", help="Set a parameter as NAME=VALUE (or PARAM_ID=VALUE when a name repeats). Repeatable; secrets are asked for at a hidden prompt."),
+    secret_file: str = typer.Option(None, "--secret-file", help="Read the trigger secret from this file instead of a hidden prompt."),
+    idempotency_key: str = typer.Option(None, "--idempotency-key", help="Send this Idempotency-Key (default: a new random one). Reusing a key returns the run it started."),
+    no_follow: bool = typer.Option(False, "--no-follow", help="Just queue the run and print its id and polling URL."),
+    no_log: bool = typer.Option(False, "--no-log", help="Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."),
+) -> None:
+    """Call an HTTP trigger now, exactly as a webhook caller would, and follow the run live.
+
+    Sends only the trigger secret and an Idempotency-Key (no API key), so it tests the real webhook path. The secret is typed at a hidden prompt or read from --secret-file, never passed as a flag. Parameters work like `sagex run workflow`. Ctrl+C cancels the run (press it again to detach).
+    """
+    client = _client_or_exit()
+    with _setup_errors(), render.run_activity(render.RunActivity("Looking up the trigger", "ctrl+c to cancel")):
+        kind, trig = resources.resolve_trigger(client, ref)
+        if kind != "http":
+            raise _RunSetupError(
+                "✗ That's a schedule trigger — it fires on its cron, not by a call.",
+                f"  To run the workflow now:  sagex run workflow \"{trig.get('workflow_name')}\"",
+            )
+        wf = resources.get_workflow_detail(client, trig.get("workflow_id"))
+
+    if not trig.get("is_active", True):
+        typer.echo(f"✗ This HTTP trigger is disabled. Enable it first:  sagex trigger enable \"{wf.get('name')}\"")
+        raise typer.Exit(code=1)
+    path = resources.http_trigger_path(trig)
+    if not path:
+        typer.echo("✗ Couldn't work out this trigger's URL. See:  sagex trigger invoke …")
+        raise typer.Exit(code=1)
+
+    specs = runner.workflow_params(wf.get("nodes"))
+    inputs, shown = _collect_workflow_inputs(specs, params or [])
+    secret = _read_trigger_secret(secret_file)
+    key = idempotency_key or str(uuid.uuid4())
+
+    try:
+        with render.run_activity(render.RunActivity("Calling the webhook", "")):
+            queued = resources.fire_http_trigger(client, path, secret, key, inputs) or {}
+    except KeyboardInterrupt:
+        typer.echo(f"Interrupted — the run may already be queued (Idempotency-Key {key}). Check:  sagex list run", err=True)
+        raise typer.Exit(code=130)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        if exc.status == 401:
+            typer.echo(f"  The secret ends ••••{trig.get('secret_last4')}. Lost it? Rotate it:  sagex trigger regenerate \"{wf.get('name')}\"")
+        raise typer.Exit(code=1)
+
+    run_id = str(queued.get("workflow_run_id") or "")
+    if not run_id:
+        typer.echo("✗ The webhook didn't return a run id.")
+        raise typer.Exit(code=1)
+    if queued.get("idempotent"):
+        render.note("That Idempotency-Key was already used, so no new run was queued — this is the run it started.")
+    if no_follow:
+        what = "Run" if queued.get("idempotent") else "Queued run"
+        typer.echo(f"✓ {what} {run_id} via the HTTP trigger (Idempotency-Key {key}).")
+        if queued.get("polling_url"):
+            typer.echo(f"  Poll it with the trigger secret:  GET {queued['polling_url']}")
+        typer.echo(f"  Or check it here:  sagex show run {run_id}")
+        return
+    raise typer.Exit(code=_watch_new_run(client, wf, run_id, shown, no_log,
+                                         via=f"via HTTP trigger · Idempotency-Key {key}"))
 
 
 def _check(raise_on_fail: bool) -> None:

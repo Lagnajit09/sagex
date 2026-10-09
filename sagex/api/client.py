@@ -53,9 +53,9 @@ class ApiClient:
         """GET `path` (e.g. '/api/workflows/') and return the envelope's `data`."""
         return self._request("GET", path, params=params)
 
-    def post(self, path: str, json=None):
+    def post(self, path: str, json=None, headers: dict | None = None):
         """POST `json` to `path` (create) and return the envelope's `data`."""
-        return self._request("POST", path, json=json)
+        return self._request("POST", path, json=json, headers=headers)
 
     def put(self, path: str, json=None):
         """PUT `json` to `path` (full update) and return the envelope's `data`."""
@@ -102,13 +102,14 @@ class ApiClient:
             headers["X-API-Key"] = self.api_key
         return headers
 
-    def _request(self, method: str, path: str, params: dict | None = None, json=None):
+    def _request(self, method: str, path: str, params: dict | None = None, json=None,
+                 headers: dict | None = None):
         url = f"{self.base_url}{path}"
         is_read = method.upper() == "GET"
         try:
             with waiting(method):
                 resp = httpx.request(
-                    method, url, headers=self._headers(),
+                    method, url, headers={**self._headers(), **(headers or {})},
                     params=params, json=json,
                     # Writes can be slow server-side (e.g. a script create uploads to storage).
                     timeout=_TIMEOUT if is_read else _WRITE_TIMEOUT,
@@ -137,7 +138,7 @@ class ApiClient:
         except Exception:
             body = None
 
-        if resp.status_code == 401:
+        if resp.status_code == 401 and self.api_key:
             raise ApiError("Not authenticated — API key missing or invalid.", status=401)
         if resp.status_code >= 400:
             message = body.get("message") if isinstance(body, dict) else None
