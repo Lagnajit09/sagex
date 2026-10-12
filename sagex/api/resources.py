@@ -447,6 +447,18 @@ def update_workflow_nodes(client: ApiClient, workflow_id, nodes: list) -> dict:
     return client.patch(f"/api/workflows/{workflow_id}/", json={"nodes": nodes})
 
 
+def get_schedule_trigger(client: ApiClient, workflow_id, node_id: str) -> dict:
+    """A schedule's detail: cron, next_runs (the scheduler's own next fire times),
+    last_run_id / last_run_status, last_error."""
+    return client.get(f"/api/workflows/{workflow_id}/triggers/schedule/{node_id}/")
+
+
+def fire_schedule_now(client: ApiClient, workflow_id, node_id: str) -> dict:
+    """Fire a schedule now through the scheduler's own path (overlap rule, no inputs,
+    recorded as a scheduled run). Returns {workflow_run_id, status}; 409 if skipped."""
+    return client.post(f"/api/workflows/{workflow_id}/triggers/schedule/{node_id}/fire/")
+
+
 def set_trigger_active(client: ApiClient, kind: str, trigger_id, is_active: bool) -> dict:
     """Enable/disable a trigger via the global endpoint. `kind` is 'http' or 'schedule'."""
     return client.patch(f"/api/triggers/{kind}/{trigger_id}/", json={"is_active": is_active})

@@ -1564,9 +1564,17 @@ def trigger_create_cmd(
         try:
             data = resources.upsert_schedule_trigger(client, wf["id"], node_id, cron)
         except ApiError as exc:
-            typer.echo(f"✗ {exc.message}")
+            detail = (exc.errors or {}).get("cron_expression") if isinstance(exc.errors, dict) else None
+            typer.echo(f"✗ {detail[0] if isinstance(detail, list) and detail else exc.message}")
             raise typer.Exit(code=1)
-        render.schedule_trigger_result(data)
+        render.schedule_trigger_result(data, wf.get("name"))
+        # Scheduled runs are started with no inputs, so a parameter without a saved
+        # value runs empty every time.
+        empty = [s["name"] for s in runner.workflow_params(wf.get("nodes"))
+                 if s["source"] == "manual" and not s["default"]]
+        if empty:
+            typer.echo(f"⚠ Scheduled runs pass no parameters, so these will run empty: {', '.join(empty)}.")
+            typer.echo("  Give them a saved value in the workflow (sagex copy workflow … → edit → push).")
 
 
 @trigger_app.command("regenerate")
@@ -2518,6 +2526,113 @@ def _watch_new_run(client, wf: dict, run_id: str, shown: dict, no_log: bool,
     return _follow_workflow_run(client, run_id, view, workspace)
 
 
+def _parse_iso(iso: str | None) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+@trigger_app.command("watch")
+def trigger_watch_cmd(
+    ref: str = typer.Argument(..., help="Workflow name, or schedule trigger id."),
+    no_log: bool = typer.Option(False, "--no-log", help="Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."),
+) -> None:
+    """Wait for a schedule's next run, then follow it live.
+
+    Counts down to the next firing (times come from the server, using the scheduler's own rules), then follows the run with the live graph. If a firing passes without a run (e.g. the previous run was still going) it says why and keeps waiting. Ctrl+C stops watching.
+    """
+    client = _client_or_exit()
+    with _setup_errors(), render.run_activity(render.RunActivity("Looking up the schedule", "ctrl+c to cancel")):
+        kind, trig = resources.resolve_trigger(client, ref)
+        if kind != "schedule":
+            raise _RunSetupError(
+                "✗ That's an HTTP trigger — it runs when it's called, not on a schedule.",
+                f"  Call it now:  sagex trigger fire \"{trig.get('workflow_name')}\"",
+            )
+        wf = resources.get_workflow_detail(client, trig.get("workflow_id"))
+
+    name = wf.get("name") or trig.get("workflow_name")
+    if not trig.get("is_active", True):
+        typer.echo(f"✗ This schedule is disabled. Enable it first:  sagex trigger enable \"{name}\"")
+        raise typer.Exit(code=1)
+
+    baseline = trig.get("last_run_id")
+    upcoming = [t for t in map(_parse_iso, trig.get("next_runs") or []) if t]
+    next_at = upcoming[0] if upcoming else None      # None: an older server without next_runs
+    activity = render.RunActivity("Waiting for the next run", "ctrl+c to stop watching")
+    run_id, errors, last_poll = None, 0, time.monotonic()
+    try:
+        with render.run_activity(activity):
+            while run_id is None:
+                now = datetime.now(timezone.utc)
+                remaining = (next_at - now).total_seconds() if next_at else None
+                if next_at:
+                    clock = next_at.astimezone().strftime("%H:%M")
+                    activity.set(f"Next run {render.time_until(remaining)} (at {clock})" if remaining > 0
+                                 else "Waiting for the scheduled run to start")
+                # Poll gently while it's far off, briskly around the firing time.
+                interval = 3 if remaining is None or remaining <= 10 else 15
+                if time.monotonic() - last_poll >= interval:
+                    last_poll = time.monotonic()
+                    try:
+                        detail = resources.get_schedule_trigger(client, trig.get("workflow_id"), trig.get("node_id"))
+                        errors = 0
+                    except ApiError as exc:
+                        detail = None
+                        errors += 1
+                        render.run_stderr(f"✗ {exc.message}")
+                        if errors >= 3:
+                            raise typer.Exit(code=1)
+                    if detail and detail.get("last_run_id") and detail.get("last_run_id") != baseline:
+                        run_id = str(detail["last_run_id"])
+                        break
+                    fresh = [t for t in map(_parse_iso, (detail or {}).get("next_runs") or []) if t]
+                    # A firing that passed (with a minute's grace) without starting a run.
+                    if next_at and remaining < -60 and fresh and fresh[0] > next_at:
+                        reason = detail.get("last_error") or "no run started — is the scheduler (Celery Beat) running?"
+                        render.run_note(f"The {next_at.astimezone().strftime('%H:%M')} run didn't start: {reason}")
+                        next_at = fresh[0]
+                    elif next_at is None and fresh:
+                        next_at = fresh[0]
+                time.sleep(1)
+    except KeyboardInterrupt:
+        render.run_note("Stopped watching.")
+        raise typer.Exit(code=130)
+
+    raise typer.Exit(code=_watch_new_run(client, wf, run_id, {}, no_log, via="via schedule"))
+
+
+def _fire_schedule_now(client, trig: dict, wf: dict, no_follow: bool, no_log: bool) -> int:
+    """Fire a schedule now (scheduler path) and follow the run; returns the exit code."""
+    name = wf.get("name") or trig.get("workflow_name")
+    if not trig.get("is_active", True):
+        typer.echo(f"✗ This schedule is disabled. Enable it first:  sagex trigger enable \"{name}\"")
+        return 1
+    try:
+        with render.run_activity(render.RunActivity("Firing the schedule", "")):
+            queued = resources.fire_schedule_now(client, trig.get("workflow_id"), trig.get("node_id")) or {}
+    except KeyboardInterrupt:
+        typer.echo("Interrupted — the run may already be queued. Check:  sagex list run", err=True)
+        return 130
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        if exc.status == 404 and exc.message.startswith("Request failed"):
+            typer.echo("  Your server may predate firing schedules on demand — update it.")
+        return 1
+
+    run_id = str(queued.get("workflow_run_id") or "")
+    if not run_id:
+        typer.echo("✗ The server didn't return a run id.")
+        return 1
+    if no_follow:
+        typer.echo(f"✓ Queued scheduled run {run_id}.")
+        typer.echo(f"  Check it:  sagex show run {run_id}")
+        return 0
+    return _watch_new_run(client, wf, run_id, {}, no_log, via="via schedule · fired now")
+
+
 def _read_trigger_secret(secret_file: str | None) -> str:
     """The HTTP trigger secret: from --secret-file, else a hidden prompt. Never a flag
     (shell history / process list) and never stored."""
@@ -2543,19 +2658,20 @@ def trigger_fire_cmd(
     no_follow: bool = typer.Option(False, "--no-follow", help="Just queue the run and print its id and polling URL."),
     no_log: bool = typer.Option(False, "--no-log", help="Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."),
 ) -> None:
-    """Call an HTTP trigger now, exactly as a webhook caller would, and follow the run live.
+    """Fire a trigger now and follow the run live: an HTTP trigger is called exactly as a webhook caller would; a schedule is fired through the scheduler's own path.
 
-    Sends only the trigger secret and an Idempotency-Key (no API key), so it tests the real webhook path. The secret is typed at a hidden prompt or read from --secret-file, never passed as a flag. Parameters work like `sagex run workflow`. Ctrl+C cancels the run (press it again to detach).
+    HTTP: sends only the trigger secret and an Idempotency-Key (no API key), so it tests the real webhook path. The secret is typed at a hidden prompt or read from --secret-file, never passed as a flag. Parameters work like `sagex run workflow`. Schedule: runs it now exactly as its cron would (no parameters; skipped if its previous run is still going). Ctrl+C cancels the run (press it again to detach).
     """
     client = _client_or_exit()
     with _setup_errors(), render.run_activity(render.RunActivity("Looking up the trigger", "ctrl+c to cancel")):
         kind, trig = resources.resolve_trigger(client, ref)
-        if kind != "http":
-            raise _RunSetupError(
-                "✗ That's a schedule trigger — it fires on its cron, not by a call.",
-                f"  To run the workflow now:  sagex run workflow \"{trig.get('workflow_name')}\"",
-            )
         wf = resources.get_workflow_detail(client, trig.get("workflow_id"))
+
+    if kind == "schedule":
+        if params or secret_file or idempotency_key:
+            typer.echo("✗ A schedule fires with no parameters, secret or Idempotency-Key — drop those options.")
+            raise typer.Exit(code=1)
+        raise typer.Exit(code=_fire_schedule_now(client, trig, wf, no_follow, no_log))
 
     if not trig.get("is_active", True):
         typer.echo(f"✗ This HTTP trigger is disabled. Enable it first:  sagex trigger enable \"{wf.get('name')}\"")

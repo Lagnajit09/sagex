@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from rich.cells import cell_len
 from rich.console import Console, Group
@@ -620,13 +620,17 @@ def trigger(kind: str, t: dict) -> None:
         if t.get("rotated_at"):
             header.append("\n"); header.append(_kv("rotated", t.get("rotated_at")))
     else:
-        header.append("\n"); header.append(_kv("cron", t.get("cron_expression")))
-        desc = describe_cron(t.get("cron_expression"))
-        if desc:
-            header.append("\n"); header.append(_kv("when", f"{desc} (UTC)"))
+        header.append("\n"); header.append(_schedule_block(t))
         header.append("\n"); header.append(_kv("timezone", t.get("timezone")))
         if t.get("last_run_id"):
-            header.append("\n"); header.append(_kv("last run", t.get("last_run_id")))
+            header.append("\n")
+            lr = Text(); lr.append("last run: ", style="bright_black")
+            status = t.get("last_run_status")
+            if status:
+                icon, color = STATUS_ICON.get(status, ("•", "white"))
+                lr.append(f"{icon} {status} ", style=color)
+            lr.append(str(t.get("last_run_id")))
+            header.append(lr)
         if t.get("last_error"):
             header.append("\n")
             err = Text(); err.append("last error: ", style="bright_black"); err.append(str(t.get("last_error")), style="red")
@@ -689,34 +693,90 @@ def _quoted(name: str | None) -> str:
 def describe_cron(expr: str) -> str | None:
     """Human-readable description of a cron expression (e.g. 'At 09:00, on day 1 …').
 
-    Best-effort: returns None if the expression is empty, unparseable, or the
-    cron_descriptor library isn't available — callers just omit the line.
+    Autosage's scheduler (Celery Beat) needs BOTH day-of-month and day-of-week to
+    match when both are set — unlike classic cron's either/or, which is what
+    cron_descriptor assumes — so that case is worded explicitly. Best-effort:
+    returns None if the expression is empty or unparseable.
     """
     if not expr:
         return None
     try:
-        from cron_descriptor import get_description
+        from cron_descriptor import ExpressionDescriptor, get_description
+
+        fields = expr.split()
+        if len(fields) == 5 and fields[2] not in ("*", "?") and fields[4] not in ("*", "?"):
+            d = ExpressionDescriptor(expr)
+            dow = d.get_day_of_week_description().lstrip(", ")
+            for prefix in ("or on ", "only on "):
+                dow = dow.removeprefix(prefix)
+            return (f"{d.get_time_of_day_description()}{d.get_day_of_month_description()}"
+                    f"{d.get_month_description()}, only when it falls on {dow}")
         return get_description(expr)
     except Exception:
         return None
 
 
-def schedule_trigger_result(data: dict) -> None:
+def time_until(seconds: float) -> str:
+    """'in 12m', 'in 8h 12m', 'in 3d 4h' (or 'now')."""
+    s = int(seconds)
+    if s < 60:
+        return "now" if s <= 0 else "in <1m"
+    if s < 3600:
+        return f"in {s // 60}m"
+    if s < 86400:
+        return f"in {s // 3600}h {s % 3600 // 60:02d}m"
+    return f"in {s // 86400}d {s % 86400 // 3600}h"
+
+
+def schedule_time(iso: str) -> Text:
+    """'Mon 13 Oct 09:00 UTC · 14:30 local · in 8h 12m' for one upcoming run."""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return Text(str(iso))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    utc, local = dt.astimezone(timezone.utc), dt.astimezone()
+    line = Text(utc.strftime("%a %d %b %H:%M UTC"))
+    if local.utcoffset() != utc.utcoffset():
+        fmt = "%H:%M" if local.date() == utc.date() else "%a %H:%M"
+        line.append(f" · {local.strftime(fmt)} local", style="bright_black")
+    line.append(f" · {time_until((utc - datetime.now(timezone.utc)).total_seconds())}", style="bright_black")
+    return line
+
+
+def _schedule_block(data: dict) -> Text:
+    """cron / when / next runs — shared by the create result and `show trigger`."""
+    body = Text()
+    body.append(_kv("cron", data.get("cron_expression")))
+    desc = describe_cron(data.get("cron_expression"))
+    if desc:
+        body.append("\n"); body.append(_kv("when", f"{desc} (UTC)"))
+    upcoming = data.get("next_runs") or []
+    if upcoming:
+        body.append("\n"); body.append(Text("next runs:", style="bright_black"))
+        for iso in upcoming:
+            body.append("\n  "); body.append(schedule_time(iso))
+    elif data.get("is_active") is False:
+        body.append("\n"); body.append(_kv("next runs", "none — the schedule is disabled"))
+    return body
+
+
+def schedule_trigger_result(data: dict, workflow_name: str | None = None) -> None:
     """Summary after creating/updating a schedule trigger."""
     console.print(Text("✓ Schedule trigger ready.", style="green"))
     body = Text()
     body.append(_kv("node", data.get("node_id")));            body.append("\n")
-    body.append(_kv("cron", data.get("cron_expression")));    body.append("\n")
-    desc = describe_cron(data.get("cron_expression"))
-    if desc:
-        body.append(_kv("when", f"{desc} (UTC)"));            body.append("\n")
-    body.append(_kv("timezone", data.get("timezone")));       body.append("\n")
+    body.append(_schedule_block(data));                       body.append("\n")
     active = data.get("is_active")
     st = Text(); st.append("active: ", style="bright_black")
     st.append("● yes", style="green") if active else st.append("○ no", style="bright_black")
     body.append(st)
     console.print(body)
     note("Cron is 5 fields (min hour day-of-month month day-of-week), evaluated in UTC.")
+    name = _quoted(workflow_name)
+    note(f"Fire it now:         sagex trigger fire {name}")
+    note(f"Watch the next run:  sagex trigger watch {name}")
 
 
 # --- credential (key) ------------------------------------------------------
