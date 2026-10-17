@@ -1,46 +1,37 @@
-"""ChatMessage — a message block in the Autobot chat log.
+"""ChatMessage — one entry in the terminal-style transcript.
 
-Supports four kinds of message ("role"), each styled uniquely via a CSS class:
-  - "user"       : what you typed to Autobot          (accent bar, no label)
-  - "autobot"    : Autobot's reply                     ("Autobot" label)
-  - "command"    : a native shell command you ran      (no label, "❯" prompt)
-  - "cmd_output" : the output of that command          ("Output" label, muted)
+Entries read like a terminal session rather than chat bubbles. Each role has a
+CSS class:
+  - "user"       : a line you typed for Autobot         ❯ how do I …
+  - "command"    : a shell command you ran (! prefix)    ❯ !ls
+  - "cmd_output" : that command's output, indented below it
+  - "autobot"    : Autobot's reply                       ● …
 
-Output blocks grow line-by-line as a command streams (see append_line).
+Output entries grow line by line as a command streams (see append_line).
 """
 
 from rich.text import Text
 
 from textual.widgets import Static
 
-
-# Roles that show a bold label above their text. Roles not listed show no label.
-ROLE_LABELS = {
-    "autobot": "Autobot",
-    "cmd_output": "Output",
-}
+from sagex.formatting import ACCENT
 
 
 class ChatMessage(Static):
-    """One chat message. `role` is one of the keys used below."""
+    """One transcript entry. `role` is one of the keys above."""
 
     DEFAULT_CSS = """
     ChatMessage {
-        width: 1fr;                          /* span the chat log width */
-        height: auto;                        /* grow to fit the text */
-        padding: 0 1;
-        margin-top: 1;                       /* gap above each message */
-        border-left: thick $primary;         /* default look = Autobot */
+        width: 1fr;
+        height: auto;
+        padding: 0;
     }
-    ChatMessage.user {
-        border-left: thick $accent;
-    }
-    ChatMessage.command {
-        border-left: thick $success;         /* command = bright accent + prompt */
+    ChatMessage.user, ChatMessage.command, ChatMessage.autobot {
+        margin-top: 1;                       /* a blank line before each new turn */
     }
     ChatMessage.cmd_output {
-        border-left: thick $success-darken-2;
-        color: $text-muted;                  /* output recedes visually */
+        padding-left: 2;                     /* output sits under its command */
+        color: $text-muted;
     }
     """
 
@@ -48,22 +39,35 @@ class ChatMessage(Static):
         super().__init__()
         self._role = role
         self._body = text
-        self.add_class(role)                 # CSS class: user/autobot/command/cmd_output
+        self._exit_code: int | None = None
+        self.add_class(role)
         self._rebuild()
 
+    @property
+    def is_empty(self) -> bool:
+        return not self._body and self._exit_code in (None, 0)
+
     def _rebuild(self) -> None:
-        """Rebuild the displayed content from the current body text."""
         content = Text()
-        if self._role == "command":
-            content.append("❯ ", style="bold")       # shell-style prompt, no label
-        else:
-            label = ROLE_LABELS.get(self._role)      # None for "user"
-            if label:
-                content.append(f"{label}\n", style="bold")
+        if self._role in ("user", "command"):
+            content.append("❯ ", style=f"bold {ACCENT}")
+            if self._role == "command":
+                content.append("!", style="bright_black")
+        elif self._role == "autobot":
+            content.append("● ", style=ACCENT)
         content.append(self._body)
-        self.update(content)                          # swap in the new renderable
+        if self._exit_code not in (None, 0):               # like a shell: only failures say so
+            if self._body:
+                content.append("\n")
+            content.append(f"exit {self._exit_code}", style="red")
+        self.update(content)
 
     def append_line(self, line: str) -> None:
         """Add one line to the body (used for streaming command output)."""
         self._body = f"{self._body}\n{line}" if self._body else line
+        self._rebuild()
+
+    def set_exit_code(self, code: int) -> None:
+        """Record how the command ended (shown only when it failed)."""
+        self._exit_code = code
         self._rebuild()

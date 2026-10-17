@@ -29,12 +29,35 @@ Header, Footer, Tree {
     padding: 0 1;
 }
 
-#autobot {
-    width: 70%;                  /* right panel takes the remaining 70% */
-    border: round $accent;
-}
-
+/* Right: the terminal-style transcript — entries flow down to the prompt line. */
 #chat-log {
-    height: 1fr;                 /* fill all the space above the input box */
-    padding: 0 1;                /* breathing room from the border */
+    width: 70%;                  /* the remaining 70% */
+    height: 1fr;
+    padding: 0 1;
+}
+#welcome {
+    width: auto;                 /* hug the banner text */
+    border: round #d77757;
+    padding: 0 1;
+}
+#command-activity {
+    margin-top: 1;
+}
+#prompt-row {
+    height: auto;
+    margin-top: 1;               /* a blank line above the prompt, like a fresh turn */
+}
+#prompt-glyph {
+    width: 2;
+    color: #d77757;              /* the same accent as the ❯ on past entries */
+    text-style: bold;
+}
+#chat-input, #chat-input:focus {
+    width: 1fr;
+    background: transparent;     /* no box: you type straight onto the line */
+    background-tint: transparent;
+}
+#prompt-status {
+    height: auto;
+    color: $text-muted;
 }
