@@ -1,0 +1,59 @@
+name: Deploy website
+
+# The static site in web/ → Firebase Hosting target `site` (sagecode.web.app).
+#
+# - push to main  → deploy to the LIVE channel.
+# - pull_request  → deploy to a temporary PREVIEW channel; the Firebase action
+#   comments its URL on the PR. Does not touch live.
+# - manual        → workflow_dispatch, to redeploy without a new commit.
+#
+# Needs the repo secret FIREBASE_SERVICE_ACCOUNT (a service-account JSON with
+# Firebase Hosting Admin on the autosagex project).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
+      - "firebase.json"
+      - ".firebaserc"
+      - ".github/workflows/website.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
+      - "firebase.json"
+  workflow_dispatch:
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write          # the Firebase action reports the preview URL as a check
+      pull-requests: write   # ...and comments it on the PR
+    steps:
+      - uses: actions/checkout@v4
+
+      # sagecode.web.app/install.sh and /install.ps1 are served from the site, but
+      # scripts/ stays their single source (the README links there too).
+      - name: Publish the install scripts with the site
+        run: cp scripts/install.sh scripts/install.ps1 web/
+
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: autosagex
+          target: site
+          channelId: ${{ github.ref == 'refs/heads/main' && 'live' || '' }}
+        env:
+          FIREBASE_CLI_PREVIEWS: hostingchannels

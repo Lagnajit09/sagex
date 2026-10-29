@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "autosagex"
+  },
+  "targets": {
+    "autosagex": {
+      "hosting": {
+        "site": [
+          "sagecode"
+        ]
+      }
+    }
+  }
+}

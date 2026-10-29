@@ -36,7 +36,8 @@ Header, Footer, Tree {
     padding: 0 1;
 }
 #welcome {
-    width: auto;                 /* hug the banner text */
+    width: auto;                 /* hug the banner text… */
+    max-width: 100%;             /* …but wrap, not clip, on a narrow terminal */
     border: round #d77757;
     padding: 0 1;
 }

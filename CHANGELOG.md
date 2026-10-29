@@ -2,6 +2,15 @@
 
 All notable changes to sagex are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- The terminal app's header reads "sagex" (it showed the internal class name).
+- The welcome banner wraps on narrow terminals instead of being cut off.
+
+### Changed
+- The project homepage is now https://sagecode.web.app.
+
 ## [1.0.0] - 2026-10-29
 
 The first public release: everything the Autosage web app does, from your terminal. Autobot chat follows in v2.

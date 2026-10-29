@@ -25,6 +25,7 @@ class SagexApp(App):
     """The whole application. Everything hangs off this one class."""
 
     CSS_PATH = "app.tcss"                 # styling loaded from the file next to this one
+    TITLE = "sagex"                       # shown in the header (defaults to the class name)
 
     BINDINGS = [
         # Not a bare "q": you type straight into the transcript, so a letter key must
@@ -95,8 +96,8 @@ class SagexApp(App):
         text.append("Start with ", style="bright_black")
         text.append("!", style="bold")
         text.append(" to run a command, e.g. ", style="bright_black")
-        text.append("!sagex list workflow", style="bold")
-        text.append("  ·  Autobot chat arrives in sagex v2\n", style="bright_black")
+        text.append("!sagex list workflow\n", style="bold")
+        text.append("Autobot chat arrives in sagex v2\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
                     style="bright_black")
         return text

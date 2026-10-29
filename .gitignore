@@ -13,3 +13,8 @@ build/
 dist/
 
 wf.json
+
+# Website: install scripts are copied into web/ at deploy time (scripts/ is the source).
+web/install.sh
+web/install.ps1
+.firebase/

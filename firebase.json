@@ -1,0 +1,20 @@
+{
+  "hosting": {
+    "target": "site",
+    "public": "web",
+    "ignore": ["firebase.json", "**/.*", "tools/**", "README.md"],
+    "headers": [
+      {
+        "source": "/install.@(sh|ps1)",
+        "headers": [
+          { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+          { "key": "Cache-Control", "value": "public, max-age=300" }
+        ]
+      },
+      {
+        "source": "/assets/**",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=3600" }]
+      }
+    ]
+  }
+}

@@ -58,7 +58,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Lagnajit09/sagex"
+Homepage = "https://sagecode.web.app"
 Documentation = "https://autosagexdocs.web.app"
 Repository = "https://github.com/Lagnajit09/sagex"
 Issues = "https://github.com/Lagnajit09/sagex/issues"

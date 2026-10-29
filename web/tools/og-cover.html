@@ -1,0 +1,54 @@
+<!doctype html>
+<!--
+  Source of web/assets/img/og-cover.png (the 1200×630 social share image).
+  Re-render after editing, e.g. with headless Chrome:
+    chrome --headless=new --hide-scrollbars --window-size=1200,630 \
+      --screenshot=web/assets/img/og-cover.png web/tools/og-cover.html
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400..700&family=Montserrat:wght@400..800&display=swap">
+  <style>
+    html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+    body {
+      position: relative; background: #050507; color: #ececf2; font-family: Montserrat, sans-serif;
+      background-image:
+        radial-gradient(closest-side at 78% 46%, rgba(179, 115, 231, 0.28), transparent 70%),
+        linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 100% 100%, 24px 24px, 24px 24px;
+    }
+    .rail { position: absolute; top: 0; bottom: 0; width: 1px; background: #1c1c27; }
+    .mark { position: absolute; font: 400 16px/1 "JetBrains Mono", monospace; color: #6c6c7e; }
+    .copy { position: absolute; left: 96px; top: 112px; width: 640px; }
+    .eyebrow { font: 500 15px/1 "JetBrains Mono", monospace; letter-spacing: .16em; text-transform: uppercase; color: #6c6c7e; }
+    .eyebrow b { color: #b373e7; font-weight: 600; }
+    .brand { display: flex; align-items: center; gap: 16px; margin-top: 34px; font-weight: 700; font-size: 44px; letter-spacing: -.03em; }
+    .brand img { width: 60px; height: 60px; }
+    h1 { margin: 30px 0 0; font-size: 58px; line-height: 1.04; letter-spacing: -.04em; font-weight: 700; }
+    h1 span { background: linear-gradient(100deg, #ececf2 10%, #d0a8f0 55%, #b373e7 90%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .cmd {
+      display: inline-flex; gap: 12px; margin-top: 40px; padding: 16px 20px; border: 1px solid #2a2a38; border-radius: 12px;
+      background: #0c0c12; font: 500 19px/1 "JetBrains Mono", monospace;
+    }
+    .cmd i { color: #d77757; font-style: normal; }
+    .art { position: absolute; right: 96px; top: 118px; width: 340px; height: 340px; }
+    .art img { width: 100%; height: 100%; filter: drop-shadow(0 40px 80px rgba(97, 0, 148, 0.55)); }
+    .url { position: absolute; right: 96px; bottom: 58px; font: 500 16px/1 "JetBrains Mono", monospace; color: #a3a3b4; letter-spacing: .04em; }
+  </style>
+</head>
+<body>
+  <div class="rail" style="left: 64px"></div><div class="rail" style="right: 64px"></div>
+  <span class="mark" style="left: 59px; top: 46px">+</span><span class="mark" style="right: 59px; top: 46px">+</span>
+  <span class="mark" style="left: 59px; bottom: 46px">+</span><span class="mark" style="right: 59px; bottom: 46px">+</span>
+  <div class="copy">
+    <div class="eyebrow"><b>v1.0</b> · the command line for Autosage</div>
+    <div class="brand"><img src="../assets/img/logo.svg" alt="">sagex</div>
+    <h1>Operate your infrastructure <span>from the terminal.</span></h1>
+    <div class="cmd"><i>$</i>uv tool install sagex-cli</div>
+  </div>
+  <div class="art"><img src="../assets/img/logo.svg" alt=""></div>
+  <div class="url">sagecode.web.app</div>
+</body>
+</html>
