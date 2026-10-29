@@ -12,12 +12,28 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".sagex"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+try:
+    from sagex._env import VALUES as _BAKED    # written from .env at build time (setup.py)
+except ImportError:                            # a checkout that was never built/installed
+    _BAKED = {}
+
+
+def _baked(name: str) -> str:
+    value = _BAKED.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} isn't configured. In the sagex checkout: cp .env.example .env, "
+            "fill it in, then run: pip install -e ."
+        )
+    return value.rstrip("/")
+
+
 # The hosted Autosage API. Override per-shell with SAGEX_API_URL (see api_url()), or
 # persistently with "api_url" in config.json — e.g. a local dev stack on :8080.
-DEFAULT_API_URL = "https://autosagex-api.duckdns.org"
+DEFAULT_API_URL = _baked("SAGEX_API_URL")
 
 # The Autosage web app — where users request a key and (until sagex v2) chat with Autobot.
-WEB_URL = "https://autosagex.web.app"
+WEB_URL = _baked("SAGEX_WEB_URL")
 
 # Every setting the app understands, with its default value.
 DEFAULTS = {

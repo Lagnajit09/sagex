@@ -143,6 +143,18 @@ uv tool upgrade sagex-cli        # or: pipx upgrade sagex-cli / pip install -U s
 
 To uninstall, run `sagex auth logout` first (it removes your key from the keychain), then `uv tool uninstall sagex-cli` (or `pipx uninstall` / `pip uninstall`).
 
+## Development
+
+```sh
+git clone https://github.com/Lagnajit09/sagex && cd sagex
+cp .env.example .env          # then fill in the server URLs
+python -m venv .venv && . .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+pytest
+```
+
+`.env` holds build settings (server URLs). They're baked into the package when it's built, so they ship publicly: never put secrets there. After editing `.env`, re-run `pip install -e .`.
+
 ## Roadmap
 
 - **v1.1:** see your sagex sessions on your Autosage profile.

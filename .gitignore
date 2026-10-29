@@ -3,6 +3,10 @@ CLAUDE.md
 **/__pycache__/**
 .pytest_cache/
 
+# Build settings: .env is local (template: .env.example); _env.py is generated from it.
+.env
+sagex/_env.py
+
 # Packaging build artifacts
 *.egg-info/
 build/
