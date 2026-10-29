@@ -1,41 +1,68 @@
 # Packaging for sagex-cli.
 #
-# What this gives us:
-#   pip install -e .    -> installs the package in "editable" mode (your source
-#                          stays live; edits take effect without reinstalling)
-#   sagex               -> a real console command, thanks to [project.scripts]
-#                          below (no more `python -m sagex`).
+#   pip install -e ".[dev]"   -> editable dev install (source stays live)
+#   uv build                  -> sdist + wheel in dist/ (what the release workflow publishes)
+#   sagex                     -> the console command, from [project.scripts] below
 
 [build-system]
-# The tool that turns this project into an installable package.
-requires = ["setuptools>=68"]
+# >=77 for PEP 639 `license` / `license-files` metadata.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sagex-cli"
-description = "A terminal app for Autosage."
+description = "Autosage in your terminal: build, run and watch workflows, scripts, vaults and triggers from a TUI or one-shot commands."
 readme = "README.md"
-requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Lagnajit Moharana" }]
+# 3.11 is the floor: the server sends ISO timestamps ending in "Z", which
+# datetime.fromisoformat() only accepts from 3.11.
+requires-python = ">=3.11"
 # Version isn't written here — it's read from sagex/__init__.py (see [tool.setuptools.dynamic]),
-# so there's a single source of truth.
+# so there's a single source of truth. The release workflow checks the git tag matches it.
 dynamic = ["version"]
+keywords = ["autosage", "sagex", "automation", "workflow", "cli", "tui", "devops", "ssh", "winrm"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
 
-# Runtime dependencies — what a user needs just to RUN sagex. Mirrors
-# requirements.txt, minus textual-dev (a dev-only tool, see [dev] below).
+# Runtime dependencies — what a user needs just to RUN sagex. Compatible ranges
+# rather than exact pins, so `pip install` into a shared environment doesn't fight
+# other packages; the upper bounds stop a breaking major (or, for 0.x, minor) release.
 dependencies = [
-    "textual==8.2.8",
-    "rich==15.0.0",
-    "httpx==0.28.1",
-    "keyring==25.7.0",
-    "typer==0.27.2",
-    "cron-descriptor==2.1.0",
+    "textual>=8.2.8,<9",
+    "rich>=15.0.0,<16",
+    "httpx>=0.28.1,<0.29",
+    "keyring>=25.7.0,<26",
+    "typer>=0.27.2,<0.28",
+    "cron-descriptor>=2.1.0,<3",
 ]
 
 [project.optional-dependencies]
 # Installed only with `pip install -e ".[dev]"` — the Textual dev console etc.
 dev = [
     "textual-dev==1.8.0",
+    "pytest>=8",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Lagnajit09/sagex"
+Documentation = "https://autosagexdocs.web.app"
+Repository = "https://github.com/Lagnajit09/sagex"
+Issues = "https://github.com/Lagnajit09/sagex/issues"
+Changelog = "https://github.com/Lagnajit09/sagex/blob/main/CHANGELOG.md"
 
 [project.scripts]
 # This is the line that creates the `sagex` command. It points at the Typer
@@ -54,3 +81,6 @@ include = ["sagex*"]
 # app.tcss isn't a .py file, so it wouldn't be packaged by default. Include it
 # so CSS_PATH still resolves in a real (non-editable) wheel install.
 sagex = ["*.tcss"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

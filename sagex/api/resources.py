@@ -297,12 +297,15 @@ def fetch_log_text(url: str) -> str:
     """
     if not url:
         return ""
+    # Never put `exc` in the message: httpx embeds the full signed URL in it, and that
+    # URL is a working credential for the log until it expires.
     try:
         with client_waiting("GET"):
             resp = httpx.get(url, timeout=30.0)
-        resp.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise ApiError(f"couldn't download log ({exc})")
+    except httpx.HTTPError:
+        raise ApiError("couldn't download log (network error)")
+    if resp.status_code >= 400:
+        raise ApiError(f"couldn't download log (HTTP {resp.status_code})")
     return resp.text
 
 

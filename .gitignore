@@ -1,6 +1,7 @@
 CLAUDE.md
 .venv
 **/__pycache__/**
+.pytest_cache/
 
 # Packaging build artifacts
 *.egg-info/

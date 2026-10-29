@@ -7,6 +7,7 @@ from a background worker (like shell commands) so the UI never blocks.
 """
 
 import json
+import os
 from contextlib import nullcontext
 
 import httpx
@@ -16,6 +17,11 @@ from sagex.api import store
 
 _TIMEOUT = 15.0
 _WRITE_TIMEOUT = 60.0
+
+# Gateway errors come from nginx/the platform with an HTML body — no envelope message.
+_UNAVAILABLE_STATUSES = (502, 503, 504)
+
+_UNREACHABLE = "Unable to reach the Autosage server. Check your connection and try again later."
 
 # Optional `factory(method) -> context manager` wrapped around each request; the
 # CLI installs one to show its activity line. None (e.g. in the TUI) = no indicator.
@@ -41,6 +47,15 @@ class ApiError(Exception):
         self.message = message
         self.status = status
         self.errors = errors            # the envelope's `errors` (e.g. a code, candidates)
+
+
+def _connection_error(message: str, base_url: str, exc: Exception) -> ApiError:
+    """A user-facing network error. Deliberately generic: end users shouldn't see
+    internal URLs or be told to start a server they don't run. SAGEX_DEBUG=1 appends
+    the URL and the underlying error, for troubleshooting a custom SAGEX_API_URL."""
+    if os.environ.get("SAGEX_DEBUG") == "1":
+        message = f"{message} [{base_url}: {type(exc).__name__}: {exc}]"
+    return ApiError(message)
 
 
 class ApiClient:
@@ -90,10 +105,10 @@ class ApiClient:
                     yield frame
         except httpx.RequestError as exc:
             if started:
-                raise ApiError("Lost the connection to the backend mid-run.") from exc
-            raise ApiError(
-                f"Can't reach the backend at {self.base_url}. Is it running?"
-            ) from exc
+                raise _connection_error(
+                    "Lost the connection to the Autosage server mid-run.", self.base_url, exc
+                ) from exc
+            raise _connection_error(_UNREACHABLE, self.base_url, exc) from exc
 
     # --- internals -----------------------------------------------------------
 
@@ -116,9 +131,7 @@ class ApiClient:
                     timeout=_TIMEOUT if is_read else _WRITE_TIMEOUT,
                 )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            raise ApiError(
-                f"Can't reach the backend at {self.base_url}. Is it running?"
-            ) from exc
+            raise _connection_error(_UNREACHABLE, self.base_url, exc) from exc
         except httpx.TimeoutException as exc:
             # The request reached the server, so a change may still have been applied.
             raise ApiError(
@@ -127,9 +140,7 @@ class ApiClient:
                 "through. Check before retrying."
             ) from exc
         except httpx.RequestError as exc:
-            raise ApiError(
-                f"Can't reach the backend at {self.base_url}. Is it running?"
-            ) from exc
+            raise _connection_error(_UNREACHABLE, self.base_url, exc) from exc
         return self._unwrap(resp)
 
     def _unwrap(self, resp: httpx.Response):
@@ -140,7 +151,16 @@ class ApiClient:
             body = None
 
         if resp.status_code == 401 and self.api_key:
-            raise ApiError("Not authenticated — API key missing or invalid.", status=401)
+            raise ApiError(
+                "Not authenticated — your API key is invalid or was revoked. "
+                "Run: sagex auth login",
+                status=401,
+            )
+        if resp.status_code in _UNAVAILABLE_STATUSES:
+            raise ApiError(
+                "The Autosage server is temporarily unavailable. Please try again later.",
+                status=resp.status_code,
+            )
         if resp.status_code >= 400:
             message = body.get("message") if isinstance(body, dict) else None
             errors = body.get("errors") if isinstance(body, dict) else None
@@ -171,6 +191,5 @@ def _sse_frames(lines):
 
 
 def build_client() -> ApiClient:
-    """Build a client from the current config (base URL) and stored key."""
-    settings = config.load()
-    return ApiClient(settings["api_url"], store.get_key())
+    """Build a client from the configured base URL and the stored key."""
+    return ApiClient(config.api_url(), store.get_key())

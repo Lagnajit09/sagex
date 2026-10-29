@@ -1,7 +1,7 @@
 """The sagex terminal application: layout and event wiring.
 
-Appearance lives in app.tcss; mock data in data.py; status formatting in
-formatting.py. This file focuses on WHAT widgets exist and HOW they react.
+Appearance lives in app.tcss; status formatting in formatting.py. This file
+focuses on WHAT widgets exist and HOW they react.
 """
 
 import os
@@ -78,7 +78,7 @@ class SagexApp(App):
                 with Horizontal(id="prompt-row"):
                     yield Static("❯ ", id="prompt-glyph")
                     yield PromptInput(
-                        placeholder="Ask Autobot, or start with ! to run a shell command",
+                        placeholder="Start with ! to run a command — e.g. !sagex list workflow",
                         id="chat-input",
                         compact=True,
                     )
@@ -92,10 +92,11 @@ class SagexApp(App):
         text.append("✻ ", style=ACCENT)
         text.append("Welcome to sagex", style="bold")
         text.append("  ·  Autosage in your terminal\n\n", style="bright_black")
-        text.append("Type to ask Autobot · start with ", style="bright_black")
+        text.append("Start with ", style="bright_black")
         text.append("!", style="bold")
-        text.append(" to run a shell command, e.g. ", style="bright_black")
-        text.append("!sagex list workflow\n", style="bold")
+        text.append(" to run a command, e.g. ", style="bright_black")
+        text.append("!sagex list workflow", style="bold")
+        text.append("  ·  Autobot chat arrives in sagex v2\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
                     style="bright_black")
         return text
@@ -167,11 +168,13 @@ class SagexApp(App):
             out = self._new_output_message()            # its output streams in below
             self._set_busy(True)
             self.execute_command(command, out)
-        else:                            # otherwise -> agent prompt (placeholder for now)
+        else:                            # otherwise -> agent prompt (Autobot lands in v2)
             self.add_message(text, role="user")
             self.add_message(
-                "(placeholder reply — I'm not connected to the server yet.)",
-                role="autobot",
+                "Autobot isn't available in the terminal yet — it's coming in sagex v2.\n"
+                "Meanwhile, start a line with ! to run a command (try !sagex --help), "
+                f"or chat with Autobot on the web: {config.WEB_URL}/ai/autobot",
+                role="notice",
             )
 
     @work(thread=True)

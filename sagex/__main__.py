@@ -1,12 +1,11 @@
 """sagex entry point.
 
-    sagex               -> launch the terminal app (TUI)
-    sagex auth login    -> store an API key (paste when prompted)
-    sagex auth status   -> check whether you're authenticated
-    sagex auth logout   -> remove the stored key
+    sagex                 -> launch the terminal app (TUI)
+    sagex <group> <verb>  -> run one command and exit, e.g. `sagex list workflow`
 
 Typer parses the command line: with no subcommand, the callback launches the TUI;
-otherwise the matching `auth` command runs as a plain CLI action.
+otherwise the matching command runs as a plain CLI action. `sagex --help` lists
+every group.
 """
 
 import json
@@ -30,15 +29,18 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from sagex import __version__, config, copier, pusher, render, runner, runview
-from sagex.api import ApiError, build_client, resources
+from sagex.api import ApiClient, ApiError, build_client, resources
 from sagex.api import store
 from sagex.api.client import set_wait_indicator
 from sagex.app import SagexApp
 
 app = typer.Typer(
-    help="sagex — a terminal app for Autosage.",
+    help="sagex — Autosage in your terminal. Run with no command to open the terminal app.",
     add_completion=False,
     no_args_is_help=False,          # no args -> run the callback (launch the TUI)
+    # Typer's crash report prints every frame's local variables by default — which
+    # would include the API key (client.api_key) and any secret being prompted for.
+    pretty_exceptions_show_locals=False,
 )
 auth_app = typer.Typer(help="Manage authentication (API key).")
 app.add_typer(auth_app, name="auth")
@@ -383,27 +385,72 @@ def syntax_cmd(
 
 @auth_app.command("login")
 def auth_login() -> None:
-    """Store an API key (paste it when prompted)."""
+    """Log in with your sagex API key (paste it when prompted)."""
+    render.note(f"sagex is in early access — API keys are issued on request: {config.WEB_URL}/contact")
     key = typer.prompt("Paste your sagex API key", hide_input=True).strip()
     if not key:
         typer.echo("No key entered.")
         raise typer.Exit(code=1)
-    store.set_key(key)
-    typer.echo("Key saved to your OS keychain.")
-    _check(raise_on_fail=False)     # verify right away, but don't hard-fail login
+    if not key.startswith("sgx_"):
+        typer.echo("✗ That doesn't look like a sagex API key (they start with sgx_).")
+        raise typer.Exit(code=1)
+
+    # Verify BEFORE storing, so a mistyped or revoked key never lands in the keychain.
+    # Only a 401/403 proves the key is bad; if the server is down we can't tell, so
+    # save it anyway and say it's unverified.
+    problem = None
+    try:
+        ApiClient(config.api_url(), key).get(_VERIFY_PATH)
+    except ApiError as exc:
+        if exc.status in (401, 403):
+            typer.echo("✗ That key wasn't accepted — check you pasted all of it, or request a new one.")
+            raise typer.Exit(code=1)
+        problem = exc.message
+
+    try:
+        store.set_key(key)
+    except store.KeyStoreError:
+        typer.echo("✗ No OS keychain is available on this machine to store the key.")
+        typer.echo(f"  Set it in your environment instead:  {store.ENV_VAR}=<your key>")
+        raise typer.Exit(code=1)
+
+    if problem:
+        typer.echo("Key saved to your OS keychain, but it couldn't be verified right now:")
+        typer.echo(f"  {problem}")
+    else:
+        typer.echo("✓ Logged in — key saved to your OS keychain.")
+    if store.key_from_env():
+        render.note(f"{store.ENV_VAR} is set in your environment and takes precedence over the saved key.")
 
 
 @auth_app.command("status")
 def auth_status() -> None:
-    """Show whether you're authenticated."""
-    _check(raise_on_fail=True)
+    """Show whether you're logged in, and check the key still works."""
+    key = store.get_key()
+    if not key:
+        typer.echo("Not logged in. Run:  sagex auth login")
+        raise typer.Exit(code=1)
+
+    client = build_client()
+    try:
+        client.get(_VERIFY_PATH)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    # Name the server only when it isn't the hosted one (i.e. a SAGEX_API_URL override).
+    where = "" if client.base_url == config.DEFAULT_API_URL else f" at {client.base_url}"
+    source = f" via {store.ENV_VAR}" if store.key_from_env() else ""
+    typer.echo(f"✓ Logged in to Autosage{where} · key sgx_…{key[-4:]}{source}")
 
 
 @auth_app.command("logout")
 def auth_logout() -> None:
-    """Remove the stored API key."""
+    """Remove the stored API key from your OS keychain."""
     store.delete_key()
-    typer.echo("Logged out — API key removed.")
+    typer.echo("Logged out — API key removed from your OS keychain.")
+    if store.key_from_env():
+        render.note(f"{store.ENV_VAR} is still set in your environment, so sagex will keep using it.")
 
 
 @workspace_app.command("set")
@@ -2854,27 +2901,6 @@ def trigger_poll_cmd(
         raise typer.Exit(code=130)
     if watch:
         raise typer.Exit(code=0 if view.status == "success" else 1)
-
-
-def _check(raise_on_fail: bool) -> None:
-    """Verify the stored key against the backend and print the result."""
-    key = store.get_key()
-    if not key:
-        typer.echo("Not logged in. Run:  sagex auth login")
-        if raise_on_fail:
-            raise typer.Exit(code=1)
-        return
-
-    client = build_client()
-    try:
-        client.get(_VERIFY_PATH)
-    except ApiError as exc:
-        typer.echo(f"✗ {exc.message}")
-        if raise_on_fail:
-            raise typer.Exit(code=1)
-        return
-
-    typer.echo(f"✓ Authenticated to {client.base_url}")
 
 
 if __name__ == "__main__":

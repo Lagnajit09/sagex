@@ -1,0 +1,3 @@
+# install.sh is piped straight into `sh` from raw.githubusercontent.com — a CRLF
+# checkout would break it ("\r: command not found"), whatever the local autocrlf.
+*.sh text eol=lf

@@ -6,6 +6,7 @@ CSS class:
   - "command"    : a shell command you ran (! prefix)    ❯ !ls
   - "cmd_output" : that command's output, indented below it
   - "autobot"    : Autobot's reply                       ● …
+  - "notice"     : a dim note from sagex itself          ○ …
 
 Output entries grow line by line as a command streams (see append_line).
 """
@@ -26,12 +27,14 @@ class ChatMessage(Static):
         height: auto;
         padding: 0;
     }
-    ChatMessage.user, ChatMessage.command, ChatMessage.autobot {
+    ChatMessage.user, ChatMessage.command, ChatMessage.autobot, ChatMessage.notice {
         margin-top: 1;                       /* a blank line before each new turn */
+    }
+    ChatMessage.cmd_output, ChatMessage.notice {
+        color: $text-muted;
     }
     ChatMessage.cmd_output {
         padding-left: 2;                     /* output sits under its command */
-        color: $text-muted;
     }
     """
 
@@ -55,6 +58,8 @@ class ChatMessage(Static):
                 content.append("!", style="bright_black")
         elif self._role == "autobot":
             content.append("● ", style=ACCENT)
+        elif self._role == "notice":
+            content.append("○ ")
         content.append(self._body)
         if self._exit_code not in (None, 0):               # like a shell: only failures say so
             if self._body:

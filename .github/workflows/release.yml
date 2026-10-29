@@ -1,0 +1,118 @@
+# Publishes a release when a version tag is pushed:
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# PyPI upload uses Trusted Publishing (OIDC) — no API token is stored in GitHub.
+# One-time setup on pypi.org: add a trusted publisher for project "sagex-cli",
+# owner "Lagnajit09", repository "sagex", workflow "release.yml", environment "pypi".
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # A tag that disagrees with sagex.__version__ would publish a mislabelled package.
+      - name: Check the tag matches the package version
+        id: version
+        run: |
+          VERSION=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('sagex/__init__.py').read()).group(1))")
+          if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match sagex.__version__ ${VERSION}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest -q
+
+      - name: Build
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/wheel-env
+          /tmp/wheel-env/bin/pip install dist/*.whl
+          /tmp/wheel-env/bin/sagex --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sagex-cli/
+    permissions:
+      id-token: write          # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # create the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # Release notes = this version's CHANGELOG section, plus install lines.
+          # Literal index() matching, not regexes: bracket escaping differs between
+          # awk implementations (the runner's default is mawk).
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { on = 1; next }
+            on && index($0, "## [") == 1 { exit }
+            on && index($0, "[") == 1 && index($0, "]: ") > 0 { next }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::No CHANGELOG.md section for ${VERSION}"
+            exit 1
+          fi
+          {
+            echo ""
+            echo "### Install"
+            echo ""
+            echo '```sh'
+            echo "uv tool install sagex-cli==${VERSION}   # or: pipx install sagex-cli==${VERSION}"
+            echo '```'
+          } >> notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "sagex ${VERSION}" --notes-file notes.md
