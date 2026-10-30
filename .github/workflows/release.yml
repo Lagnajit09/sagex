@@ -1,4 +1,5 @@
-# Publishes a release when a version tag is pushed:
+# Publishes a release when a version tag is pushed — and only then (no path filter:
+# it never runs for ordinary pushes to main):
 #
 #   git tag v1.0.0 && git push origin v1.0.0
 #

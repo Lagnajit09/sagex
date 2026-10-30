@@ -80,7 +80,10 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-h) + 24px); }
+html {
+  scroll-behavior: smooth; scroll-padding-top: calc(var(--header-h) + 24px);
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;   /* no font inflation on rotate (iOS) */
+}
 
 body {
   margin: 0;
@@ -242,6 +245,10 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 [data-theme="light"] .theme-toggle .sun { display: block; }
 [data-theme="light"] .theme-toggle .moon { display: none; }
 .menu-toggle { display: none; }
+.menu-toggle .i-close { display: none; }
+.menu-open .menu-toggle .i-open { display: none; }
+.menu-open .menu-toggle .i-close { display: block; }
+.nav .nav-cta { display: none; }        /* the menu's Install button: phones only */
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
 
@@ -413,7 +420,8 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .run-panel .rp-sub { position: absolute; bottom: -0.72em; right: 10px; padding: 0 6px; background: var(--t-bg); color: var(--t-dim); }
 .run-panel.done { border-color: #2f9e5c; }
 .run-panel.done .rp-sub { color: #3ddc84; }
-.run-panel .row { display: grid; grid-template-columns: 22ch 1fr; }
+.run-panel { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 3ch; }
+.run-panel .row { display: contents; }   /* rows share the panel's columns */
 .run-panel .row .hd { white-space: pre; overflow: hidden; }
 .run-panel .row .det { color: var(--t-dim); white-space: pre; }
 .run-panel .row.pending, .run-panel .row.pending .ic { color: var(--t-dim); }
@@ -530,7 +538,9 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
   background: linear-gradient(140deg, color-mix(in srgb, var(--brand) 60%, transparent), var(--line) 35%, var(--line) 65%, color-mix(in srgb, var(--brand) 40%, transparent));
   box-shadow: 0 40px 120px -50px var(--brand-glow);
 }
+.showcase-frame { display: block; }
 .showcase-frame img { width: 100%; height: auto; border-radius: 15px; background: #0c0c0c; }
+.zoom-hint { display: none; }
 .keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 26px; margin-top: 36px; color: var(--text-2); font-size: 0.92rem; }
 .keys span { display: inline-flex; align-items: center; gap: 8px; }
 kbd {
@@ -690,6 +700,7 @@ kbd {
 .cmd-group > header { display: flex; align-items: baseline; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .cmd-group > header h2 { font: 600 1.05rem/1.2 var(--font-mono); letter-spacing: 0; }
 .cmd-group > header p { margin: 0; color: var(--text-3); font-size: 0.9rem; }
+.cmd-group > header p code { padding: 1px 5px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface-2); font-size: 0.86em; color: var(--text-2); white-space: nowrap; }
 
 .cmd { border-bottom: 1px solid var(--line); }
 /* Deep links land just below the sticky search bar (html scroll-padding already clears the header). */
@@ -750,32 +761,66 @@ mark { background: var(--brand-soft); color: inherit; border-radius: 3px; paddin
 }
 
 @media (max-width: 900px) {
+  /* Header: links move into a dropdown panel. */
   .nav { display: none; }
   .menu-toggle { display: inline-grid; }
-  .site-header.menu-open .nav {
-    display: flex; flex-direction: column; align-items: stretch; gap: 2px;
-    position: absolute; top: var(--header-h); left: 0; right: 0; padding: 12px 16px 16px;
-    background: var(--bg); border-bottom: 1px solid var(--line);
-  }
-  .site-header.menu-open .nav a { padding: 12px; }
   .header-actions .btn { display: none; }
+  /* With the nav links hidden, nothing pushes the buttons right — so they do it themselves. */
+  .header-actions { margin-left: auto; }
+  .site-header.menu-open .nav {
+    display: flex; flex-direction: column; align-items: stretch; gap: 0;
+    position: absolute; top: var(--header-h); left: 0; right: 0; padding: 8px 20px 20px;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+    box-shadow: 0 24px 40px -24px rgba(0, 0, 0, 0.6);
+  }
+  .site-header.menu-open .nav a:not(.nav-cta) {
+    padding: 14px 4px; border-radius: 0; border-bottom: 1px solid var(--line); font-size: 1rem;
+  }
+  .site-header.menu-open .nav a[aria-current="page"] { color: var(--brand-2); }
+  [data-theme="light"] .site-header.menu-open .nav a[aria-current="page"] { color: var(--brand); }
+  .site-header.menu-open .nav .nav-cta { display: inline-flex; margin-top: 18px; height: 46px; color: var(--btn-fg); }
 
-  .map { grid-template-columns: 1fr; gap: 48px; margin-top: 64px; }
-  .map-col { grid-template-columns: 1fr 1fr; }
+  .map { grid-template-columns: minmax(0, 1fr); gap: 48px; margin-top: 64px; }
+  .map-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .map-col-label { grid-column: 1 / -1; }
   .split, .split.wide-right { grid-template-columns: 1fr; gap: 40px; }
   .cards-3 { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .stat:nth-child(3) { border-left: 0; }
   .stat:nth-child(n + 3) { border-top: 1px solid var(--line); }
-  .releases { grid-template-columns: 1fr; }
+
+  /* Releases: the git graph becomes a vertical timeline. */
   .train svg { display: none; }
-  .train { padding: 24px; }
+  .train { padding: 26px 22px; }
+  .releases { position: relative; grid-template-columns: 1fr; gap: 26px; margin-top: 0; }
+  .releases::before { content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 2px; background: var(--line-strong); }
+  .release { position: relative; padding: 0 0 0 30px; }
+  .release::before {
+    content: ""; position: absolute; left: 0; top: 1px; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--surface); border: 2px solid var(--line-strong);
+  }
+  .release:first-child::before { background: var(--brand); border-color: var(--brand); box-shadow: 0 0 0 5px var(--brand-soft); }
+
   .footer-grid { grid-template-columns: 1fr 1fr; }
   .footer-grid > div:first-child { grid-column: 1 / -1; }
 
-  .docs { grid-template-columns: minmax(0, 1fr); gap: 32px; }
-  .toc { position: static; }
+  /* Docs: the contents list becomes a strip of chips above the content. */
+  .page-hero { padding: 56px 0 40px; }
+  .docs { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 28px; }
+  .toc { position: static; display: grid; gap: 10px; }
+  .toc h4 { display: none; }
+  .toc ul {
+    display: flex; gap: 8px; overflow-x: auto; border-left: 0; padding: 2px 0 6px;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .toc ul::-webkit-scrollbar { display: none; }
+  /* Fade the right edge so the strip reads as scrollable; the padding lets the last chip clear it. */
+  .toc ul { padding-right: 28px; -webkit-mask-image: linear-gradient(to right, #000 82%, transparent); mask-image: linear-gradient(to right, #000 82%, transparent); }
+  .toc a {
+    margin: 0; padding: 7px 13px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap;
+    background: var(--surface); color: var(--text-2); font-size: 0.85rem;
+  }
+  .toc a.is-current { border-color: var(--brand); color: var(--text); }
   .log-entry { grid-template-columns: 1fr; gap: 16px; }
   .log-entry .meta { position: static; }
   .cmd > summary { grid-template-columns: 1fr 20px; gap: 6px 12px; }
@@ -784,21 +829,69 @@ mark { background: var(--brand-soft); color: inherit; border-radius: 3px; paddin
 }
 
 @media (max-width: 600px) {
-  .section { padding: 80px 0; }
-  .hero { padding: 64px 0 72px; }
+  .section { padding: 72px 0; }
+  .hero { padding: 48px 0 64px; }
+  .section-head { margin-bottom: 40px; }
+  .brand small { display: none; }
+
+  /* Hero */
+  .pill .pill-more { display: none; }
+  .hero h1 { margin-top: 22px; }
+  .hero .lead { font-size: 1.02rem; }
+  .hero-ctas { flex-direction: column; align-items: center; }
+  .hero-ctas .btn { width: 100%; max-width: 360px; height: 48px; }
+  .hero-meta { gap: 8px 16px; }
+  .hero-meta span + span::before { display: none; }
+
+  /* Install widget: tabs fit, and the whole command is visible (wrapped). */
+  .install-tabs { padding: 5px; overflow-x: auto; scrollbar-width: none; }
+  .install-tabs::-webkit-scrollbar { display: none; }
+  .install-tabs button { padding: 8px 9px; font-size: 11px; white-space: nowrap; }
+  .install-panel { align-items: flex-start; padding: 14px 12px 14px 14px; }
+  .install-panel code, .prose .install-panel code { white-space: normal; overflow-wrap: anywhere; line-height: 1.6; font-size: 12.5px; }
+  .copy-btn { height: 36px; }
+
+  /* System map: two compact columns of nodes. */
+  .map { gap: 40px; margin-top: 52px; }
+  .map-col { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .map-node { gap: 10px; padding: 10px; }
+  .map-node .ico { width: 30px; height: 30px; }
+  .map-node .ico svg { width: 15px; height: 15px; }
+  .map-node > div { min-width: 0; }
+  .map-node strong { font-size: 0.84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-node span { display: none; }
+  .hub-term .term-body { min-height: 0; }
+
+  /* Stats */
+  .stat { padding: 18px; }
+  .stat b { font-size: 1.45rem; }
+  .stat span { font-size: 11px; }
+
+  /* Cards and sections */
   .cards-4, .cards-2 { grid-template-columns: 1fr; }
+  .card { padding: 20px; }
+  .card .kicker { top: 20px; right: 20px; }
   .arch { grid-template-columns: 1fr; }
   .arch-step { border-left: 0; border-top: 1px solid var(--line); }
   .arch-step:first-child { border-top: 0; }
   .arch-step::after { display: none; }
-  .map-col { grid-template-columns: 1fr; }
-  .brand small { display: none; }
-  .term-body { font-size: 12px; }
-  .hub-term .term-body { min-height: 320px; }
-}
+  .zoom-hint { display: block; margin-top: 12px; text-align: center; font: 500 12px/1 var(--font-mono); color: var(--text-3); }
+  .keys { gap: 10px 18px; font-size: 0.86rem; }
 
-/* Phones: long code may wrap, and the commands' option tables stack. */
-@media (max-width: 600px) {
+  /* Terminals wrap long lines instead of clipping them (the run panel keeps its columns). */
+  .term-body { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; }
+  .term-title { margin-right: 0; }
+
+  /* Docs */
+  .page-hero { padding: 40px 0 28px; }
+  .page-hero p { font-size: 1.02rem; }
+  .prose h2 { font-size: 1.4rem; }
+  .prose > section { padding-bottom: 36px; margin-bottom: 36px; }
+  .steps > li { padding-left: 44px; }
+  .steps > li::before { width: 30px; height: 30px; border-radius: 8px; font-size: 11px; }
+  .steps > li::after { left: 15px; top: 34px; }
+
+  /* Long code may wrap, and the commands' option tables stack. */
   .prose :not(pre) > code:not(.install-panel code), .prose td:first-child code,
   .cmd .sum code, .cmd-body p code, .cmd-body td code { white-space: normal; overflow-wrap: anywhere; }
   .prose th, .prose td { padding: 9px 10px; }
@@ -807,6 +900,21 @@ mark { background: var(--brand-soft); color: inherit; border-radius: 3px; paddin
   .cmd-body td { padding: 2px 4px; border-top: 0; }
   .cmd-body td:first-child { width: auto; white-space: normal; }
   .cmd-body .copy-line code { white-space: normal; overflow-wrap: anywhere; }
+
+  /* Commands page */
+  .cmd-tools { padding: 12px 0; }
+  .search input { font-size: 16px; }      /* below 16px, iOS zooms in on focus */
+  .search kbd { display: none; }
+  .cmd-group > header { flex-direction: column; align-items: flex-start; gap: 4px; }
+}
+
+@media (max-width: 380px) {
+  .container { padding: 0 20px; }
+  .site-header .container { gap: 12px; }
+  .header-actions { gap: 6px; }
+  .icon-btn { width: 34px; height: 34px; }
+  .hub-term .term-body { font-size: 11px; }
+  .run-panel { column-gap: 2ch; padding: 12px 10px 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

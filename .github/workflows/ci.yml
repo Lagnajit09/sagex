@@ -1,9 +1,32 @@
 name: CI
 
+# Only for changes to the CLI and how it's packaged; the website (web/) has its own
+# workflow. README.md and LICENSE ship inside the package (twine check validates the README).
 on:
   push:
     branches: [main]
+    paths:
+      - "sagex/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "setup.py"
+      - "requirements.txt"
+      - ".env.example"
+      - "README.md"
+      - "LICENSE"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths:
+      - "sagex/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "setup.py"
+      - "requirements.txt"
+      - ".env.example"
+      - "README.md"
+      - "LICENSE"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

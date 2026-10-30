@@ -21,11 +21,22 @@
   const header = $(".site-header");
   const menuBtn = $(".menu-toggle");
   if (header && menuBtn) {
-    menuBtn.addEventListener("click", () => {
-      const open = header.classList.toggle("menu-open");
+    const setMenu = (open) => {
+      header.classList.toggle("menu-open", open);
       menuBtn.setAttribute("aria-expanded", String(open));
+      menuBtn.setAttribute("aria-label", open ? "Close menu" : "Menu");
+    };
+    menuBtn.addEventListener("click", () => setMenu(!header.classList.contains("menu-open")));
+    $$(".nav a", header).forEach((a) => a.addEventListener("click", () => setMenu(false)));
+    // Close on Esc (back to the button), on a tap outside the header, and when the
+    // window grows past the phone layout.
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && header.classList.contains("menu-open")) { setMenu(false); menuBtn.focus(); }
     });
-    $$(".nav a", header).forEach((a) => a.addEventListener("click", () => header.classList.remove("menu-open")));
+    document.addEventListener("click", (e) => {
+      if (header.classList.contains("menu-open") && !header.contains(e.target)) setMenu(false);
+    });
+    window.matchMedia("(min-width: 901px)").addEventListener("change", (e) => { if (e.matches) setMenu(false); });
   }
 
   /* ── Install tabs: OS-aware default, kept in sync across the page ───── */

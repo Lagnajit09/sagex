@@ -79,7 +79,7 @@
       shown += cmds.length;
       if (!cmds.length) return "";
       return `<section class="cmd-group" id="group-${g.name}">
-        <header><h2>sagex ${esc(g.name)}</h2><p>${esc(g.blurb)}</p></header>
+        <header><h2>sagex ${esc(g.name)}</h2><p>${rich(g.blurb, "")}</p></header>
         ${cmds.map((c) => commandHTML(c, needle)).join("")}
       </section>`;
     }).join("");
