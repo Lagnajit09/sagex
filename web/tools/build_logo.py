@@ -1,17 +1,25 @@
-"""Regenerate the sagex logo files in web/assets/img/.
+"""Regenerate the SageCode logo files in web/assets/img/.
 
-The mark, on a 64×64 grid:
-  - a hexagon: the infrastructure cell (a cluster, a node, a container), drawn faint;
-  - a bold "S" traced through it: the automation, and the name;
-  - a node at each end of the S: the agents / servers it connects;
-  - a four-point spark at the core: the AI that orchestrates it.
-It is 180°-symmetric, and reads as an S down to favicon size.
+The mark ("CLI Flow"): an S drawn as a pipeline in two strokes.
+  - An upper hook starts at a node (top right), runs left, and curls round in one
+    wide arc that wraps a second node, like Autosage's "@" wrapping its gear.
+  - From that node a lower run heads right, turns down round a second wide arc,
+    and comes back left to an end node.
+  - A terminal prompt (>_) sits in the lower curve.
+The gradient follows the flow: light where the pipeline starts, deeper at the end.
+
+Geometry is measured from the reference artwork, in its own units (the mark spans
+roughly x 46–154, y 2–96).
 
     python web/tools/build_logo.py
 
-Writes logo.svg + favicon.svg (brand tile), mark.svg (bare glyph in currentColor,
-for monochrome use on any background) and apple-touch-icon.svg, which is
-rasterised to apple-touch-icon.png (180×180) by any browser or SVG renderer.
+Writes:
+  logo.svg, favicon.svg   black app-icon tile (favicon uses a heavier small-size cut)
+  logo-light.svg          white tile
+  mark-dark.svg           bare mark for dark backgrounds (site header/footer, dark theme)
+  mark-light.svg          bare mark for light backgrounds (light theme)
+  mark.svg                one-colour mark in currentColor
+  apple-touch-icon.svg    full-bleed square → rasterise to apple-touch-icon.png (180×180)
 """
 
 import math
@@ -19,94 +27,124 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parents[1] / "assets" / "img"
 
-C = 32                    # centre
-HEX_R = 22.5              # hexagon circumradius (pointy-top)
-S_STROKE = 5.8            # the S
-EDGE_STROKE = 2.2         # the faint hexagon edges
-EDGE_OPACITY = 0.42
-CORNER_R = 4.5            # rounding at the S's bends
-NODE_R = 4.4              # agent nodes at the S's ends
-SPARK_R, SPARK_WAIST = 7.6, 2.35
-SPARK_GAP = 7.2           # clear space cut round the spark (an SVG mask, so any background works)
+# ── Geometry (reference units) ─────────────────────────────────────────────────
+TOP_Y = 9.5                       # upper run
+HOOK_C, HOOK_R = (76.0, 36.0), 26.5
+HOOK_END_DEG = 111                # where the hook's tail stops (0° = right, y down)
+TOP_NODE = (128.0, 9.5)
+MID_NODE = (74.0, 33.5)           # sits at the hook's centre
+LOW_C, LOW_R = (122.0, 61.25), 27.75
+BOT_Y = LOW_C[1] + LOW_R          # 89
+END_NODE = (60.0, BOT_Y)
+NODE_R = 7.0
+MID_NODE_R = 6.5
+PORT_GAP = 2.2                    # the small gap between the top node and its run
+BBOX = (46.0, 2.5, 154.0, 96.0)   # x0, y0, x1, y1 of the inked mark
+
+# Optical sizes: the display cut matches the reference; the small cut (favicon,
+# 16–32 px) is heavier and drops the prompt, which can't survive at that size.
+DISPLAY = {"stroke": 7.5, "node": 1.0, "prompt": True}
+SMALL = {"stroke": 14.0, "node": 1.35, "prompt": False}
+
+# ── Palettes: (hook start, hook end), (low start, low mid, low end), prompt ────
+PALETTES = {
+    # Autosage purple on dark: lavender → nebula → royal.
+    "dark": (("#E7C9FB", "#C68FF2"), ("#D9ABF7", "#A65BE6", "#7A2FD0"), "#ECE6F7"),
+    # Deeper on light backgrounds.
+    "light": (("#9B4FE0", "#7A1FB8"), ("#8A3FD6", "#6B12A8", "#3F0071"), "#0C0B12"),
+}
 
 
 def _p(x: float, y: float) -> str:
     return f"{x:.2f} {y:.2f}"
 
 
-def _hex() -> list[tuple[float, float]]:
-    """Vertices T, UR, LR, B, LL, UL."""
-    return [(C + HEX_R * math.cos(math.radians(a)), C + HEX_R * math.sin(math.radians(a)))
-            for a in (-90, -30, 30, 90, 150, 210)]
+def _on(c, r, deg):
+    a = math.radians(deg)
+    return c[0] + r * math.cos(a), c[1] + r * math.sin(a)
 
 
-def _rounded(points: list[tuple[float, float]], r: float) -> str:
-    """A polyline whose interior corners are rounded (quadratic) over distance r."""
-    def toward(a, b, dist):
-        length = math.hypot(b[0] - a[0], b[1] - a[1])
-        return a[0] + (b[0] - a[0]) * dist / length, a[1] + (b[1] - a[1]) * dist / length
-
-    d = f"M{_p(*points[0])}"
-    for prev, corner, nxt in zip(points, points[1:], points[2:]):
-        d += f" L{_p(*toward(corner, prev, r))} Q{_p(*corner)} {_p(*toward(corner, nxt, r))}"
-    return d + f" L{_p(*points[-1])}"
-
-
-def _spark() -> str:
-    pts = []
-    for i in range(8):
-        a = math.radians(i * 45 - 90)
-        r = SPARK_R if i % 2 == 0 else SPARK_WAIST
-        pts.append((C + r * math.cos(a), C + r * math.sin(a)))
-    d = f"M{_p(*pts[0])}" + "".join(f" Q{_p(*pts[i + 1])} {_p(*pts[(i + 2) % 8])}" for i in range(0, 8, 2))
-    return d + " Z"
+def paths(stroke: float) -> tuple[str, str]:
+    """(upper hook, lower run) as SVG path data."""
+    hook_top = (HOOK_C[0], HOOK_C[1] - HOOK_R)                       # = (76, 9.5)
+    start_x = TOP_NODE[0] - NODE_R - PORT_GAP - stroke / 2           # leave the port gap
+    hook = (f"M{_p(start_x, TOP_Y)} H{hook_top[0]:.2f} "
+            f"A{HOOK_R} {HOOK_R} 0 0 0 {_p(*_on(HOOK_C, HOOK_R, HOOK_END_DEG))}")
+    low_top, low_bot = (LOW_C[0], LOW_C[1] - LOW_R), (LOW_C[0], LOW_C[1] + LOW_R)
+    low_mid = _on(LOW_C, LOW_R, 0)                                   # rightmost point
+    low = (f"M{_p(*MID_NODE)} H{low_top[0]:.2f} "
+           f"A{LOW_R} {LOW_R} 0 0 1 {_p(*low_mid)} A{LOW_R} {LOW_R} 0 0 1 {_p(*low_bot)} "
+           f"H{END_NODE[0]:.2f}")
+    return hook, low
 
 
-def glyph(fill: str, mask_id: str) -> tuple[str, str]:
-    """(defs, body) for the mark in `fill`."""
-    t, ur, lr, b, ll, ul = _hex()
-    outline = "M" + " L".join(_p(*v) for v in (t, ur, lr, b, ll, ul)) + " Z"
-    s_path = _rounded([ur, t, ul, (C, C), lr, b, ll], CORNER_R)
-    defs = (f'<mask id="{mask_id}" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">'
-            f'<rect width="64" height="64" fill="#fff"/><circle cx="{C}" cy="{C}" r="{SPARK_GAP}" fill="#000"/></mask>')
-    body = (f'<g mask="url(#{mask_id})" fill="none" stroke="{fill}" stroke-linecap="round" stroke-linejoin="round">'
-            f'<path d="{outline}" stroke-width="{EDGE_STROKE}" stroke-opacity="{EDGE_OPACITY}"/>'
-            f'<path d="{s_path}" stroke-width="{S_STROKE}"/></g>'
-            f'<circle cx="{ur[0]:.2f}" cy="{ur[1]:.2f}" r="{NODE_R}" fill="{fill}"/>'
-            f'<circle cx="{ll[0]:.2f}" cy="{ll[1]:.2f}" r="{NODE_R}" fill="{fill}"/>'
-            f'<path d="{_spark()}" fill="{fill}"/>')
+def glyph(palette: str | None, cut: dict, ids: str, mono: str = "currentColor") -> tuple[str, str]:
+    """(defs, body). palette=None draws everything in `mono`."""
+    hook, low = paths(cut["stroke"])
+    nr, mr = NODE_R * cut["node"], MID_NODE_R * cut["node"]
+    if palette:
+        (h0, h1), (l0, l1, l2), ink = PALETTES[palette]
+        defs = (f'<linearGradient id="{ids}h" x1="130" y1="8" x2="52" y2="58" gradientUnits="userSpaceOnUse">'
+                f'<stop stop-color="{h0}"/><stop offset="1" stop-color="{h1}"/></linearGradient>'
+                f'<linearGradient id="{ids}l" x1="70" y1="20" x2="140" y2="95" gradientUnits="userSpaceOnUse">'
+                f'<stop stop-color="{l0}"/><stop offset=".45" stop-color="{l1}"/><stop offset="1" stop-color="{l2}"/></linearGradient>')
+        hc, lc = f"url(#{ids}h)", f"url(#{ids}l)"
+    else:
+        defs, hc, lc, ink = "", mono, mono, mono
+    sw = cut["stroke"]
+    body = (f'<path d="{hook}" fill="none" stroke="{hc}" stroke-width="{sw}" stroke-linecap="round"/>'
+            f'<path d="{low}" fill="none" stroke="{lc}" stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round"/>'
+            f'<circle cx="{TOP_NODE[0]}" cy="{TOP_NODE[1]}" r="{nr}" fill="{hc}"/>'
+            f'<circle cx="{MID_NODE[0]}" cy="{MID_NODE[1]}" r="{mr}" fill="{lc}"/>'
+            f'<circle cx="{END_NODE[0]}" cy="{END_NODE[1]}" r="{nr}" fill="{lc}"/>')
+    if cut["prompt"]:
+        body += (f'<path d="M83 50 L95 59.5 L83 69" fill="none" stroke="{ink}" stroke-width="3.4" '
+                 f'stroke-linecap="round" stroke-linejoin="round"/>'
+                 f'<path d="M101 69 H117" stroke="{ink}" stroke-width="3.4" stroke-linecap="round"/>')
     return defs, body
 
 
-GRADIENT = ('<linearGradient id="sagex-tile" x1="6" y1="4" x2="58" y2="62" gradientUnits="userSpaceOnUse">'
-            '<stop stop-color="#3F0071"/><stop offset=".55" stop-color="#610094"/><stop offset="1" stop-color="#B373E7"/>'
-            '</linearGradient>')
+def _view(pad: float) -> str:
+    x0, y0, x1, y1 = BBOX
+    return f"{x0 - pad:.1f} {y0 - pad:.1f} {x1 - x0 + 2 * pad:.1f} {y1 - y0 + 2 * pad:.1f}"
 
 
-def tile(rounded: bool = True) -> str:
-    defs, body = glyph("#fff", "sagex-cut")
+def bare(palette: str | None, ids: str) -> str:
+    defs, body = glyph(palette, DISPLAY, ids)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{_view(2)}"><title>SageCode</title>'
+            f'{f"<defs>{defs}</defs>" if defs else ""}{body}</svg>\n')
+
+
+def tile(dark: bool = True, rounded: bool = True, small: bool = False) -> str:
+    """The mark centred on a 64×64 tile, 74% of the tile wide."""
+    cut = SMALL if small else DISPLAY
+    defs, body = glyph("dark" if dark else "light", cut, "sct")
+    x0, y0, x1, y1 = BBOX
+    s = 64 * 0.74 / (x1 - x0)
+    tx, ty = 32 - s * (x0 + x1) / 2, 32 - s * (y0 + y1) / 2
+    bg, edge_c = ("#0A0A0F", "#ffffff") if dark else ("#ffffff", "#0C0B12")
     rx = 15 if rounded else 0
-    edge = ('<rect x=".75" y=".75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="#fff" '
-            'stroke-opacity=".16" stroke-width="1.5"/>' if rounded else "")
-    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>sagex</title>'
-            f'<defs>{GRADIENT}{defs}</defs><rect width="64" height="64" rx="{rx}" fill="url(#sagex-tile)"/>'
-            f'{edge}{body}</svg>\n')
-
-
-def mark() -> str:
-    defs, body = glyph("currentColor", "sagex-mark-cut")
-    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="7 6 50 52"><title>sagex</title>'
-            f'<defs>{defs}</defs>{body}</svg>\n')
+    edge = (f'<rect x=".75" y=".75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="{edge_c}" '
+            f'stroke-opacity=".1" stroke-width="1.5"/>' if rounded else "")
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>SageCode</title>'
+            f'<defs>{defs}</defs><rect width="64" height="64" rx="{rx}" fill="{bg}"/>{edge}'
+            f'<g transform="translate({tx:.3f} {ty:.3f}) scale({s:.4f})">{body}</g></svg>\n')
 
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "logo.svg").write_text(tile(), encoding="utf-8")
-    (OUT / "favicon.svg").write_text(tile(), encoding="utf-8")
-    (OUT / "mark.svg").write_text(mark(), encoding="utf-8")
-    # iOS masks its own rounded corners, so the touch icon is a full-bleed square.
-    (OUT / "apple-touch-icon.svg").write_text(tile(rounded=False), encoding="utf-8")
-    print(f"wrote logo.svg, favicon.svg, mark.svg, apple-touch-icon.svg in {OUT}")
+    files = {
+        "logo.svg": tile(dark=True),
+        "favicon.svg": tile(dark=True, small=True),
+        "logo-light.svg": tile(dark=False),
+        "mark-dark.svg": bare("dark", "scd"),
+        "mark-light.svg": bare("light", "scl"),
+        "mark.svg": bare(None, "scm"),
+        "apple-touch-icon.svg": tile(dark=True, rounded=False),
+    }
+    for name, svg in files.items():
+        (OUT / name).write_text(svg, encoding="utf-8")
+    print("wrote " + ", ".join(files) + f" in {OUT}")
 
 
 if __name__ == "__main__":

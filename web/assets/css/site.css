@@ -102,6 +102,19 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; border-radius: 6px; }
 
+/* Scrollbars: thin, no track, no arrow buttons, just a faint thumb. (Not hover-only:
+   Chromium doesn't repaint a custom thumb when its container becomes hovered.) */
+::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text-3) 32%, transparent); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text-3) 65%, transparent); }
+/* Firefox has no ::-webkit-scrollbar; its standard properties give the same thin look.
+   (Scoped to it: in Chromium, setting these would switch the rules above off.) */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-3) 32%, transparent) transparent; }
+}
+
 /* Inline code in running text (docs prose has its own, slightly larger, rule). */
 .card p code, .section-head p code, .cta p code, .lead code, .checklist code {
   padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface-2);
@@ -194,7 +207,15 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .site-header .container { height: 100%; display: flex; align-items: center; gap: 32px; }
 
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; letter-spacing: -0.02em; }
-.brand img { width: 28px; height: 28px; }
+.brand img { width: auto; height: 28px; }
+/* The bare mark has a dark- and a light-background version; show the one for the theme. */
+.brand .on-light { display: none; }
+[data-theme="light"] .brand .on-dark { display: none; }
+[data-theme="light"] .brand .on-light { display: block; }
+.wordmark b {
+  font-weight: inherit; background: linear-gradient(95deg, var(--brand-2), var(--brand));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
 .brand small {
   font: 500 11px/1 var(--font-mono); color: var(--text-3); letter-spacing: 0.06em;
   padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; margin-left: 2px;
@@ -293,10 +314,9 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .install-panel { display: flex; align-items: center; gap: 12px; padding: 16px 12px 16px 18px; }
 .install-panel[hidden] { display: none; }
 .install-panel code {
-  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
   font-size: 13px; color: var(--text);
 }
-.install-panel code::-webkit-scrollbar { display: none; }
 .install-panel code .p { color: var(--cli); user-select: none; margin-right: 10px; }
 .install-note { padding: 10px 18px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--text-3); }
 .install-note a { color: var(--brand-2); }

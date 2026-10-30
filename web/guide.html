@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Guide · sagex</title>
-  <meta name="description" content="How sagex works, and recipes for running scripts, building workflows as files, webhooks, schedules, CI pipelines and the vault.">
+  <title>Guide · SageCode</title>
+  <meta name="description" content="How SageCode works, and recipes for running scripts, building workflows as files, webhooks, schedules, CI pipelines and the vault.">
   <meta property="og:type" content="article">
-  <meta property="og:title" content="The sagex guide">
+  <meta property="og:title" content="The SageCode guide">
   <meta property="og:description" content="Concepts and recipes: scripts, workflows as files, webhooks, schedules, CI and the vault.">
   <meta property="og:url" content="https://sagecode.web.app/guide.html">
   <meta property="og:image" content="https://sagecode.web.app/assets/img/og-cover.png">
@@ -28,7 +28,7 @@
   <!-- chrome:header -->
   <header class="site-header">
     <div class="container">
-      <a class="brand" href="index.html" aria-label="sagex home"><img src="assets/img/logo.svg" alt="" width="28" height="28">sagex<small>v1.0</small></a>
+      <a class="brand" href="index.html" aria-label="SageCode home"><img class="brand-mark on-dark" src="assets/img/mark-dark.svg" alt="" width="32" height="28"><img class="brand-mark on-light" src="assets/img/mark-light.svg" alt="" width="32" height="28"><span class="wordmark">Sage<b>Code</b></span><small>v1.0</small></a>
       <nav class="nav" aria-label="Main">
         <a href="index.html#features">Features</a>
         <a href="install.html">Install</a>
@@ -37,7 +37,7 @@
         <a href="changelog.html">Changelog</a>
       </nav>
       <div class="header-actions">
-        <a class="icon-btn" href="https://github.com/Lagnajit09/sagex" aria-label="sagex on GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg></a>
+        <a class="icon-btn" href="https://github.com/Lagnajit09/sagex" aria-label="SageCode on GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg></a>
         <button class="icon-btn theme-toggle" type="button" aria-label="Toggle colour theme"><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
         <button class="icon-btn menu-toggle" type="button" aria-label="Menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <a class="btn btn-primary btn-sm" href="install.html">Install</a>
@@ -51,7 +51,7 @@
       <div class="grid-bg" aria-hidden="true"></div>
       <div class="container" style="position: relative">
         <div class="eyebrow"><b>02</b> Guide</div>
-        <h1>Working with sagex</h1>
+        <h1>Working with SageCode</h1>
         <p>The few ideas every command shares, then recipes for the jobs you'll do most: running scripts, building workflows, webhooks, schedules and CI.</p>
       </div>
     </section>
@@ -86,13 +86,13 @@
             <li>Names are matched without regard to case. <code>sagex show workflow deploy</code> finds “Deploy”.</li>
             <li>Script names include their extension: <code>deploy.sh</code>, <code>migrate.py</code>.</li>
             <li>Runs are usually named by id, and the first few characters are enough: <code>sagex show run 46a2</code>.</li>
-            <li>If a name matches more than one thing, sagex lists the matches with their ids so you can pick. For a server or key whose name exists in more than one vault, add <code>--vault</code>.</li>
+            <li>If a name matches more than one thing, SageCode lists the matches with their ids so you can pick. For a server or key whose name exists in more than one vault, add <code>--vault</code>.</li>
           </ul>
         </section>
 
         <section id="workspace">
           <h2>Your workspace</h2>
-          <p>sagex keeps local files in one folder, your <strong>workspace</strong>. It's the current directory unless you choose one, and it's a good thing to keep in git.</p>
+          <p>SageCode keeps local files in one folder, your <strong>workspace</strong>. It's the current directory unless you choose one, and it's a good thing to keep in git.</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
             <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex workspace set ~/infra</span><span class="l">Workspace set to: /home/you/infra</span></div>
@@ -114,7 +114,7 @@
           <h2>Output and exit codes</h2>
           <ul>
             <li><strong>Tables by default, JSON on request.</strong> Every <code>list</code> and most <code>show</code> commands take <code>--json</code>, ready for <code>jq</code>.</li>
-            <li><strong>Script output on stdout, everything else on stderr.</strong> During a live run, sagex's own progress lines go to stderr, so <code>sagex run script report.sh -s web-1 &gt; report.txt</code> captures only what the script printed.</li>
+            <li><strong>Script output on stdout, everything else on stderr.</strong> During a live run, SageCode's own progress lines go to stderr, so <code>sagex run script report.sh -s web-1 &gt; report.txt</code> captures only what the script printed.</li>
             <li><strong>Exit codes you can build on.</strong> <code>run script</code> exits with the script's own exit code. <code>run workflow</code> exits 0 when the run succeeds, 1 when it fails, and 130 when you cancel it or detach.</li>
           </ul>
           <p>During a live run, <code>Ctrl+C</code> stops it. Press it again to detach: the run carries on, and <code>sagex show run &lt;id&gt;</code> checks on it later.</p>
@@ -122,7 +122,7 @@
 
         <section id="run-script">
           <h2>Run a script on a server</h2>
-          <p>Pick a script and a server from your vault. sagex streams the output live, line by line, and saves a copy of the logs in your workspace.</p>
+          <p>Pick a script and a server from your vault. SageCode streams the output live, line by line, and saves a copy of the logs in your workspace.</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
             <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex run script disk_check.sh --server web-1 -p THRESHOLD=90</span></div>
@@ -130,14 +130,14 @@
           <ul>
             <li>A script's inputs are its <code>{{NAME}}</code> markers. Each value comes from <code>--param</code>, else the script's saved default, else a prompt.</li>
             <li>Secret inputs are always asked for at a hidden prompt, never taken as a flag.</li>
-            <li>sagex connects with the key attached to the server. Use <code>--key</code> to pick a different key from the same vault.</li>
+            <li>SageCode connects with the key attached to the server. Use <code>--key</code> to pick a different key from the same vault.</li>
             <li>Add <code>--no-log</code> to skip saving the logs locally.</li>
           </ul>
         </section>
 
         <section id="workflow-files">
           <h2>Build a workflow from files</h2>
-          <p>Scaffold a workflow, fill it in with the snippets sagex gives you, preview it, then push it to the server.</p>
+          <p>Scaffold a workflow, fill it in with the snippets SageCode gives you, preview it, then push it to the server.</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
             <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex new workflow "Disk Check"           <span class="t-dim"># workflows/Disk_Check.json</span></span><span class="l"><span class="t-cli">❯</span> sagex list script                         <span class="t-dim"># ids for the nodes you'll add</span></span><span class="l"><span class="t-cli">❯</span> sagex syntax script                       <span class="t-dim"># JSON for a script node</span></span><span class="l"><span class="t-cli">❯</span> sagex render workflow --file "Disk Check" <span class="t-dim"># preview the flow</span></span><span class="l"><span class="t-cli">❯</span> sagex push workflow "Disk Check"          <span class="t-dim"># create it on the server</span></span></div>
@@ -148,12 +148,12 @@
             <li><code>sagex syntax</code> prints snippets for <code>trigger</code>, <code>script</code>, <code>email</code>, <code>decision</code>, <code>edge</code> and <code>decision-edge</code>.</li>
             <li>If the file's id is stale (say, the workflow was deleted), <code>push workflow --new</code> creates a fresh one.</li>
           </ul>
-          <p>Scripts work the same way: <code>sagex new script disk_check --lang shell</code>, then <code>sagex push script disk_check</code>. When you update a script, sagex shows a diff of the server copy against yours before asking.</p>
+          <p>Scripts work the same way: <code>sagex new script disk_check --lang shell</code>, then <code>sagex push script disk_check</code>. When you update a script, SageCode shows a diff of the server copy against yours before asking.</p>
         </section>
 
         <section id="webhook">
           <h2>Expose a webhook</h2>
-          <p>An HTTP trigger gives a workflow a URL that other systems can call. sagex creates it, shows you how to call it, and can call it exactly as an outside caller would.</p>
+          <p>An HTTP trigger gives a workflow a URL that other systems can call. SageCode creates it, shows you how to call it, and can call it exactly as an outside caller would.</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
             <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex trigger create Deploy -t http    <span class="t-dim"># prints the secret once</span></span><span class="l"><span class="t-cli">❯</span> sagex trigger invoke Deploy            <span class="t-dim"># URL, headers, body and a curl</span></span><span class="l"><span class="t-cli">❯</span> sagex trigger fire Deploy              <span class="t-dim"># call it now, then follow the run</span></span><span class="l"><span class="t-cli">❯</span> sagex trigger poll Deploy --watch      <span class="t-dim"># what a caller sees</span></span></div>
@@ -173,24 +173,24 @@
             <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex trigger create Backup -t schedule --cron "0 2 * * *"</span><span class="l"><span class="t-cli">❯</span> sagex trigger watch Backup     <span class="t-dim"># count down to the next run, then follow it</span></span><span class="l"><span class="t-cli">❯</span> sagex trigger fire Backup      <span class="t-dim"># run it now, through the scheduler</span></span></div>
           </div>
           <ul>
-            <li>Cron expressions have five fields and run in <strong>UTC</strong>. After saving, sagex shows the next runs in UTC and your local time.</li>
-            <li>Scheduled runs have nobody to ask for input, so every parameter needs a saved value. sagex warns you if one doesn't have one.</li>
+            <li>Cron expressions have five fields and run in <strong>UTC</strong>. After saving, SageCode shows the next runs in UTC and your local time.</li>
+            <li>Scheduled runs have nobody to ask for input, so every parameter needs a saved value. SageCode warns you if one doesn't have one.</li>
             <li>A firing is skipped if the previous scheduled run of the same workflow is still going. <code>trigger watch</code> tells you when that happens.</li>
             <li><code>sagex trigger disable Backup</code> pauses a schedule without deleting it; <code>enable</code> resumes it.</li>
           </ul>
-          <div class="callout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><p>Unlike classic cron, a day of the month and a day of the week in the same expression must <strong>both</strong> match: <code>0 9 1 * 5</code> runs only on a Friday that's also the 1st. sagex words its description to match.</p></div>
+          <div class="callout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><p>Unlike classic cron, a day of the month and a day of the week in the same expression must <strong>both</strong> match: <code>0 9 1 * 5</code> runs only on a Friday that's also the 1st. SageCode words its description to match.</p></div>
         </section>
 
         <section id="ci">
           <h2>Run from CI</h2>
-          <p>In a pipeline, give sagex its key through <code>SAGEX_API_KEY</code> and run a workflow. The job's exit code follows the run, so a failed deploy fails the build. Here's a GitHub Actions step:</p>
+          <p>In a pipeline, give SageCode its key through <code>SAGEX_API_KEY</code> and run a workflow. The job's exit code follows the run, so a failed deploy fails the build. Here's a GitHub Actions step:</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">.github/workflows/deploy.yml</span></div>
             <div class="term-body"><span class="l"><span class="t-brand">jobs</span>:</span><span class="l">  <span class="t-brand">deploy</span>:</span><span class="l">    <span class="t-brand">runs-on</span>: ubuntu-latest</span><span class="l">    <span class="t-brand">steps</span>:</span><span class="l">      - <span class="t-brand">uses</span>: actions/setup-python@v5</span><span class="l">        <span class="t-brand">with</span>: { <span class="t-brand">python-version</span>: "3.12" }</span><span class="l">      - <span class="t-brand">run</span>: pip install sagex-cli</span><span class="l">      - <span class="t-brand">name</span>: Deploy</span><span class="l">        <span class="t-brand">env</span>:</span><span class="l">          <span class="t-brand">SAGEX_API_KEY</span>: ${{ secrets.SAGEX_API_KEY }}</span><span class="l">        <span class="t-brand">run</span>: sagex run workflow "Deploy Production" -p VERSION=${{ github.sha }} --no-log</span></div>
           </div>
           <ul>
             <li>A pipeline can't answer prompts, so every parameter needs a value, either saved in the workflow or passed with <code>--param</code>.</li>
-            <li>Secret parameters must be saved in the workflow. sagex won't take a secret as a flag, even in CI.</li>
+            <li>Secret parameters must be saved in the workflow. SageCode won't take a secret as a flag, even in CI.</li>
             <li>Prefer not to install anything? Call the workflow's <a href="#webhook">webhook</a> with <code>curl</code>, using your commit SHA as the Idempotency-Key.</li>
           </ul>
         </section>
@@ -206,7 +206,7 @@
             <li>Key types are <code>username_password</code>, <code>ssh_key</code> and <code>certificate</code>. Passwords and passphrases are typed at hidden prompts; SSH keys and certificates come from a file you point to, or <code>-</code> to paste.</li>
             <li>Servers connect over <code>ssh</code> (port 22 by default) or <code>winrm</code> (5985).</li>
             <li><code>sagex show key deploy-key</code> keeps the secret hidden. Add <code>--reveal</code> to see it, after confirming.</li>
-            <li>Deleting a vault deletes everything in it, so sagex asks you to type the vault's name first.</li>
+            <li>Deleting a vault deletes everything in it, so SageCode asks you to type the vault's name first.</li>
           </ul>
         </section>
 
@@ -228,7 +228,7 @@
             <li><kbd>F2</kbd> switches the shell your commands run in. On Windows it cycles PowerShell, cmd and WSL; elsewhere bash and sh.</li>
             <li><kbd>Esc</kbd> stops the running command, <kbd>↑</kbd> <kbd>↓</kbd> recall earlier ones, <kbd>F5</kbd> refreshes and <kbd>Ctrl</kbd> <kbd>Q</kbd> quits.</li>
           </ul>
-          <p>Chatting with Autobot from the terminal arrives in sagex v2. Until then, Autobot is in the <a href="https://autosagex.web.app/ai/autobot">web app</a>.</p>
+          <p>Chatting with Autobot from the terminal arrives in SageCode v2. Until then, Autobot is in the <a href="https://autosagex.web.app/ai/autobot">web app</a>.</p>
         </section>
       </article>
     </div>
@@ -240,7 +240,7 @@
     <div class="container">
       <div class="footer-grid">
         <div>
-          <a class="brand" href="index.html"><img src="assets/img/logo.svg" alt="" width="28" height="28">sagex</a>
+          <a class="brand" href="index.html" aria-label="SageCode home"><img class="brand-mark on-dark" src="assets/img/mark-dark.svg" alt="" width="32" height="28"><img class="brand-mark on-light" src="assets/img/mark-light.svg" alt="" width="32" height="28"><span class="wordmark">Sage<b>Code</b></span></a>
           <p>The command line for Autosage. Build, run and watch your automation from the terminal.</p>
         </div>
         <div>
@@ -256,7 +256,7 @@
           <ul><li><a href="https://github.com/Lagnajit09/sagex">GitHub</a></li><li><a href="https://pypi.org/project/sagex-cli/">PyPI</a></li><li><a href="https://github.com/Lagnajit09/sagex/issues">Report an issue</a></li><li><a href="https://github.com/Lagnajit09/sagex/blob/main/LICENSE">MIT license</a></li></ul>
         </div>
       </div>
-      <div class="footer-bottom"><span>© 2026 sagex · MIT licensed</span><span>sagex-cli 1.0.0</span></div>
+      <div class="footer-bottom"><span>© 2026 SageCode · MIT licensed</span><span>sagex-cli 1.0.0</span></div>
     </div>
   </footer>
   <!-- /chrome:footer -->

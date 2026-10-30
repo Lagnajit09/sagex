@@ -1,7 +1,10 @@
-# sagex website
+# SageCode website
 
 The static site at **https://sagecode.web.app**: plain HTML, CSS and JavaScript,
 with no build step and no dependencies.
+
+The product is presented as **SageCode**; the command it installs is `sagex`
+(PyPI package `sagex-cli`). Keep `sagex` wherever text means the command itself.
 
 ```
 web/
@@ -11,7 +14,7 @@ web/
 │   ├── js/site.js              # theme, install tabs, copy buttons, hero animation
 │   ├── js/commands.js          # renders the command reference
 │   ├── js/commands-data.js     # GENERATED from the CLI
-│   └── img/                    # logo, favicon, TUI screenshot (GENERATED), og-cover
+│   └── img/                    # logo + marks, favicon (GENERATED), TUI screenshot (GENERATED), og-cover
 └── tools/                      # regeneration scripts (not deployed)
 ```
 
@@ -33,7 +36,7 @@ Run these from the repo root, with sagex installed (`pip install -e .`):
 | A command or option changed | `python web/tools/build_commands.py` |
 | The terminal app's look changed | `python web/tools/tui_screenshot.py` |
 | The header or footer changed (edit it in `index.html`) | `python web/tools/sync_chrome.py` |
-| The logo changed | `python web/tools/build_logo.py`, then re-render `apple-touch-icon.png` |
+| The logo changed | `python web/tools/build_logo.py`, then re-render `apple-touch-icon.png` (the header uses `mark-dark.svg` / `mark-light.svg`, one per theme) |
 | The share image changed | re-render `tools/og-cover.html` (see the comment at its top) |
 
 The landing page's command count (56) and the version in the header and footer
