@@ -32,7 +32,8 @@ def _baked(name: str) -> str:
 # persistently with "api_url" in config.json — e.g. a local dev stack on :8080.
 DEFAULT_API_URL = _baked("SAGEX_API_URL")
 
-# The Autosage web app — where users request a key and (until sagex v2) chat with Autobot.
+# The Autosage web app — where users approve sign-ins, manage their sessions and
+# (until sagex v2) chat with Autobot.
 WEB_URL = _baked("SAGEX_WEB_URL")
 
 # Every setting the app understands, with its default value.

@@ -18,7 +18,7 @@ OUT = Path(__file__).resolve().parents[1] / "assets" / "js" / "commands-data.js"
 
 # Display order + one-line blurbs for each group (the Typer help strings are terse).
 GROUPS = {
-    "auth": "Log in with your API key, check it, or log out.",
+    "auth": "Sign in with your browser (or an access token), see who you're signed in as, or sign out.",
     "list": "Compact tables of your resources. Add --json to script against them.",
     "show": "One resource in full detail.",
     "render": "Draw a workflow as a flow tree in the terminal.",

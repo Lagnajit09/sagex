@@ -8,7 +8,7 @@
 # none is available, so this works on a machine with no Python at all.
 #
 # Environment:
-#   SAGEX_VERSION   install a specific version (e.g. 1.0.0) instead of the latest
+#   SAGEX_VERSION   install a specific version (e.g. 1.1.0) instead of the latest
 set -eu
 
 PACKAGE="sagex-cli"
@@ -62,6 +62,6 @@ if ! command -v sagex >/dev/null 2>&1; then
 fi
 say ""
 say "Next steps:"
-say "  sagex auth login     # paste your API key"
+say "  sagex auth login     # approve this device in your browser"
 say "  sagex                # open the terminal app"
 say "  sagex --help         # every command"

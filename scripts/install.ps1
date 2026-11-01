@@ -7,7 +7,7 @@
 # none is available, so this works on a machine with no Python at all.
 #
 # Environment:
-#   SAGEX_VERSION   install a specific version (e.g. 1.0.0) instead of the latest
+#   SAGEX_VERSION   install a specific version (e.g. 1.1.0) instead of the latest
 #
 # Everything runs inside a function: `irm | iex` executes in the caller's scope, so
 # top-level variables would leak into the user's session.
@@ -61,7 +61,7 @@ function Install-Sagex {
     }
     Write-Host ""
     Write-Host "Next steps:"
-    Write-Host "  sagex auth login     # paste your API key"
+    Write-Host "  sagex auth login     # approve this device in your browser"
     Write-Host "  sagex                # open the terminal app"
     Write-Host "  sagex --help         # every command"
 }

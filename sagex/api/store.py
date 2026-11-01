@@ -25,15 +25,27 @@ def key_from_env() -> str | None:
     return os.environ.get(ENV_VAR, "").strip() or None
 
 
-def get_key() -> str | None:
-    """Return the API key (env first, then keychain), or None if there isn't one."""
-    env_key = key_from_env()
-    if env_key:
-        return env_key
+def keychain_key() -> str | None:
+    """The key saved by `sagex auth login`, ignoring SAGEX_API_KEY."""
     try:
         return keyring.get_password(_SERVICE, _ACCOUNT)
     except Exception:
         return None
+
+
+def get_key() -> str | None:
+    """Return the API key (env first, then keychain), or None if there isn't one."""
+    return key_from_env() or keychain_key()
+
+
+def keychain_available() -> bool:
+    """Whether this machine has a usable OS keychain (headless Linux often doesn't)."""
+    try:
+        from keyring.backends.fail import Keyring as NoKeyring
+
+        return not isinstance(keyring.get_keyring(), NoKeyring)
+    except Exception:
+        return False
 
 
 def set_key(key: str) -> None:

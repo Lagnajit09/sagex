@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Install SageCode</title>
-  <meta name="description" content="Install SageCode on macOS, Linux or Windows in one line, log in with your Autosage API key, and run your first command.">
+  <meta name="description" content="Install SageCode on macOS, Linux or Windows in one line, sign in with your Autosage account, and run your first command.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Install SageCode">
   <meta property="og:description" content="One line on macOS, Linux or Windows. Then log in and run your first command.">
@@ -28,7 +28,7 @@
   <!-- chrome:header -->
   <header class="site-header">
     <div class="container">
-      <a class="brand" href="index.html" aria-label="SageCode home"><img class="brand-mark on-dark" src="assets/img/mark-dark.svg" alt="" width="32" height="28"><img class="brand-mark on-light" src="assets/img/mark-light.svg" alt="" width="32" height="28"><span class="wordmark">Sage<b>Code</b></span><small>v1.0</small></a>
+      <a class="brand" href="index.html" aria-label="SageCode home"><img class="brand-mark on-dark" src="assets/img/mark-dark.svg" alt="" width="32" height="28"><img class="brand-mark on-light" src="assets/img/mark-light.svg" alt="" width="32" height="28"><span class="wordmark">Sage<b>Code</b></span><small>v1.1</small></a>
       <nav class="nav" aria-label="Main">
         <a href="index.html#features">Features</a>
         <a href="install.html" aria-current="page">Install</a>
@@ -53,7 +53,7 @@
       <div class="container" style="position: relative">
         <div class="eyebrow"><b>01</b> Install</div>
         <h1>Install SageCode</h1>
-        <p>Up and running in about a minute: install SageCode, log in with your API key, and run your first <code style="font-size: .9em">sagex</code> command.</p>
+        <p>Up and running in about a minute: install SageCode, sign in with your Autosage account, and run your first <code style="font-size: .9em">sagex</code> command.</p>
       </div>
     </section>
 
@@ -63,8 +63,9 @@
         <h4>On this page</h4>
         <ul>
           <li><a href="#before">Before you start</a></li>
-          <li><a href="#install">Install and log in</a></li>
+          <li><a href="#install">Install and sign in</a></li>
           <li><a href="#other">Other ways to install</a></li>
+          <li><a href="#sessions">Sessions and CI tokens</a></li>
           <li><a href="#configure">Configuration</a></li>
           <li><a href="#update">Update or uninstall</a></li>
           <li><a href="#troubleshooting">Troubleshooting</a></li>
@@ -75,14 +76,14 @@
         <section id="before">
           <h2>Before you start</h2>
           <ul>
-            <li><strong>An Autosage API key.</strong> SageCode is in early access, and keys are issued on request. <a href="https://autosagex.web.app/contact">Ask for one here</a>. Keys start with <code>sgx_</code>.</li>
+            <li><strong>An Autosage account.</strong> <a href="https://autosagex.web.app/signup">Create one free</a> if you don't have one. You sign in through your browser, so there's no key to copy.</li>
             <li><strong>macOS, Linux or Windows</strong>, with Python 3.11 or newer. The one-line installer downloads Python for you if you don't have it.</li>
-            <li><strong>An OS keychain</strong> to keep the key in. macOS and Windows have one built in; on Linux, SageCode uses Secret Service (GNOME Keyring or KWallet). No keychain, as on a CI runner? Use the <code>SAGEX_API_KEY</code> environment variable instead.</li>
+            <li><strong>An OS keychain</strong> to keep your session in. macOS and Windows have one built in; on Linux, SageCode uses Secret Service (GNOME Keyring or KWallet). No keychain, as on a CI runner? Use an <a href="#sessions">access token</a> instead.</li>
           </ul>
         </section>
 
         <section id="install">
-          <h2>Install and log in</h2>
+          <h2>Install and sign in</h2>
           <ol class="steps">
             <li>
               <h3>Run the installer</h3>
@@ -101,21 +102,21 @@
                   <button class="copy-btn" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg><span class="lbl">Copy</span></button>
                 </div>
               </div>
-              <p>To install a specific version, set <code>SAGEX_VERSION</code> first, for example <code>SAGEX_VERSION=1.0.0</code>.</p>
+              <p>To install a specific version, set <code>SAGEX_VERSION</code> first, for example <code>SAGEX_VERSION=1.1.0</code>.</p>
             </li>
             <li>
               <h3>Open a new terminal and check it</h3>
               <div class="term">
                 <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
-                <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex --version</span><span class="l">sagex 1.0.0</span></div>
+                <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex --version</span><span class="l">sagex 1.1.0</span></div>
               </div>
             </li>
             <li>
-              <h3>Log in with your API key</h3>
-              <p>Paste the key when asked. It isn't shown as you type, and SageCode checks it with the server before saving it to your OS keychain.</p>
+              <h3>Sign in with your browser</h3>
+              <p>SageCode shows a one-time code and opens Autosage in your browser. Check the code matches the one in your terminal, then click <strong>Approve</strong>. On a server or over SSH, open the link on any device instead. Your session is saved to your OS keychain.</p>
               <div class="term">
                 <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
-                <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex auth login</span><span class="l t-dim">sagex is in early access — API keys are issued on request: https://autosagex.web.app/contact</span><span class="l">Paste your sagex API key: </span><span class="l"><span class="t-ok">✓</span> Logged in — key saved to your OS keychain.</span></div>
+                <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex auth login</span><span class="l">Your one-time code: <b>WDJB-MJHT</b></span><span class="l">Approve the sign-in at: https://autosagex.web.app/cli-auth?code=WDJB-MJHT</span><span class="l t-dim">Opened your browser. Check the code matches, then approve.</span><span class="l"><span class="t-ok">✓</span> Logged in to Autosage as you@example.com on my-laptop.</span></div>
               </div>
             </li>
             <li>
@@ -138,10 +139,25 @@
               <tr><td>uv</td><td><code>uv tool install sagex-cli</code></td></tr>
               <tr><td>pipx</td><td><code>pipx install sagex-cli</code></td></tr>
               <tr><td>pip</td><td><code>pip install sagex-cli</code> (into a virtual environment)</td></tr>
-              <tr><td>A pinned version</td><td><code>uv tool install sagex-cli==1.0.0</code></td></tr>
+              <tr><td>A pinned version</td><td><code>uv tool install sagex-cli==1.1.0</code></td></tr>
             </tbody>
           </table>
           <p>Prefer to read the installer first? It's short: <a href="https://github.com/Lagnajit09/sagex/blob/main/scripts/install.sh">install.sh</a> and <a href="https://github.com/Lagnajit09/sagex/blob/main/scripts/install.ps1">install.ps1</a>.</p>
+        </section>
+
+        <section id="sessions">
+          <h2>Sessions and CI tokens</h2>
+          <p>Every sign-in is a <strong>session</strong>. The SageCode section of your <a href="https://autosagex.web.app/profile#sagecode">Autosage profile</a> lists them all: the device and system, the SageCode version, when it was last active, and how many commands and runs it has started. Revoke any of them there, and that machine is signed out at once.</p>
+          <ul>
+            <li><strong>New devices.</strong> Autosage emails you when SageCode signs in on a device it hasn't seen before.</li>
+            <li><strong>Idle sessions expire</strong> after 90 days without use. Run <code>sagex auth login</code> to sign in again.</li>
+            <li><strong>One session per machine.</strong> Signing in again replaces the machine's previous session, and <code>sagex auth logout</code> signs it out.</li>
+          </ul>
+          <p><strong>CI and scripts.</strong> Where there's no browser or keychain, create an <strong>access token</strong> on your profile (<em>Create token</em>) and store it as a secret named <code>SAGEX_API_KEY</code>. It's shown once, and works until you revoke it or it goes 90 days unused. To save one to a machine's keychain instead, pipe it in:</p>
+          <div class="term">
+            <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
+            <div class="term-body"><span class="l"><span class="t-cli">❯</span> echo "$SAGECODE_TOKEN" | sagex auth login --with-token</span><span class="l"><span class="t-ok">✓</span> Logged in to Autosage as you@example.com.</span></div>
+          </div>
         </section>
 
         <section id="configure">
@@ -150,7 +166,7 @@
           <table>
             <thead><tr><th>Variable</th><th>What it does</th></tr></thead>
             <tbody>
-              <tr><td><code>SAGEX_API_KEY</code></td><td>Use this API key instead of the keychain. It takes precedence over a saved key. Made for CI jobs and machines without a keychain.</td></tr>
+              <tr><td><code>SAGEX_API_KEY</code></td><td>Use this <a href="#sessions">access token</a> instead of the keychain. It takes precedence over a saved sign-in. Made for CI jobs and machines without a keychain.</td></tr>
               <tr><td><code>SAGEX_API_URL</code></td><td>Point SageCode at a different Autosage server.</td></tr>
               <tr><td><code>SAGEX_DEBUG=1</code></td><td>Add connection details to network errors.</td></tr>
             </tbody>
@@ -158,7 +174,7 @@
           <p>Your preferences, such as the workspace folder and the terminal app's shell, are saved in <code>~/.sagex/config.json</code>. Check your login at any time:</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
-            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex auth status</span><span class="l"><span class="t-ok">✓</span> Logged in to Autosage · key sgx_…VphY</span></div>
+            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex auth status</span><span class="l"><span class="t-ok">✓</span> Logged in to Autosage as you@example.com</span><span class="l t-dim">  Device session: my-laptop · sgx_…VphY</span><span class="l t-dim">  Activity: 12 commands · 3 runs started</span><span class="l t-dim">  Manage your sessions: https://autosagex.web.app/profile#sagecode</span></div>
           </div>
         </section>
 
@@ -169,10 +185,10 @@
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
             <div class="term-body"><span class="l"><span class="t-cli">❯</span> uv tool upgrade sagex-cli    <span class="t-dim"># or: pipx upgrade sagex-cli · pip install -U sagex-cli</span></span></div>
           </div>
-          <p>To uninstall, log out first so your key is removed from the keychain, then remove the tool:</p>
+          <p>To uninstall, log out first so the session is signed out and removed from your keychain, then remove the tool:</p>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
-            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex auth logout</span><span class="l">Logged out — API key removed from your OS keychain.</span><span class="l"><span class="t-cli">❯</span> uv tool uninstall sagex-cli</span></div>
+            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex auth logout</span><span class="l">Logged out — this machine's session is signed out and removed from your OS keychain.</span><span class="l"><span class="t-cli">❯</span> uv tool uninstall sagex-cli</span></div>
           </div>
         </section>
 
@@ -182,10 +198,11 @@
             <thead><tr><th>You see</th><th>What to do</th></tr></thead>
             <tbody>
               <tr><td><code>sagex: command not found</code></td><td>Open a new terminal so your PATH is reloaded. Still missing? Run <code>uv tool update-shell</code>, then open another terminal.</td></tr>
-              <tr><td>That doesn't look like a sagex API key</td><td>API keys start with <code>sgx_</code>. Copy the whole key and try again.</td></tr>
-              <tr><td>That key wasn't accepted</td><td>The key is mistyped or has been revoked. Paste it again, or ask for a new one.</td></tr>
-              <tr><td>No OS keychain is available on this machine</td><td>Set the key in your environment instead: <code>SAGEX_API_KEY=&lt;your key&gt;</code>.</td></tr>
-              <tr><td>Not authenticated — your API key is invalid or was revoked</td><td>Run <code>sagex auth login</code> with a current key.</td></tr>
+              <tr><td>This sign-in request expired</td><td>Approve within 10 minutes of running <code>sagex auth login</code>. Run it again for a new code.</td></tr>
+              <tr><td>That code isn't valid or has expired (in the browser)</td><td>Check you typed the code from your terminal, or run <code>sagex auth login</code> again.</td></tr>
+              <tr><td>No OS keychain is available on this machine</td><td>Create an <a href="#sessions">access token</a> on your Autosage profile and set it in your environment: <code>SAGEX_API_KEY=&lt;token&gt;</code>.</td></tr>
+              <tr><td>This SageCode session expired, was signed out or was revoked</td><td>Run <code>sagex auth login</code> to sign in again. Sessions expire after 90 days without use.</td></tr>
+              <tr><td>That doesn't look like a SageCode token</td><td>Access tokens start with <code>sgx_</code>. Copy the whole token and try again.</td></tr>
               <tr><td>Unable to reach the Autosage server</td><td>Check your internet connection and try again. For details, run the command again with <code>SAGEX_DEBUG=1</code>.</td></tr>
             </tbody>
           </table>
@@ -217,7 +234,7 @@
           <ul><li><a href="https://github.com/Lagnajit09/sagex">GitHub</a></li><li><a href="https://pypi.org/project/sagex-cli/">PyPI</a></li><li><a href="https://github.com/Lagnajit09/sagex/issues">Report an issue</a></li><li><a href="https://github.com/Lagnajit09/sagex/blob/main/LICENSE">MIT license</a></li></ul>
         </div>
       </div>
-      <div class="footer-bottom"><span>© 2026 SageCode · MIT licensed</span><span>sagex-cli 1.0.0</span></div>
+      <div class="footer-bottom"><span>© 2026 SageCode · MIT licensed</span><span>sagex-cli 1.1.0</span></div>
     </div>
   </footer>
   <!-- /chrome:footer -->

@@ -8,11 +8,12 @@ from a background worker (like shell commands) so the UI never blocks.
 
 import json
 import os
+import uuid
 from contextlib import nullcontext
 
 import httpx
 
-from sagex import config
+from sagex import config, device
 from sagex.api import store
 
 _TIMEOUT = 15.0
@@ -23,15 +24,31 @@ _UNAVAILABLE_STATUSES = (502, 503, 504)
 
 _UNREACHABLE = "Unable to reach the Autosage server. Check your connection and try again later."
 
+_NOT_AUTHENTICATED = (
+    "Not authenticated — this session is invalid or was revoked. Run: sagex auth login"
+)
+
 # Optional `factory(method) -> context manager` wrapped around each request; the
 # CLI installs one to show its activity line. None (e.g. in the TUI) = no indicator.
 _wait_indicator = None
+
+# Every request names this process and the command it's running, so Autosage can
+# show the session's activity on the user's profile ("12 commands · last: run
+# workflow"). One id per process = one command, however many requests it makes.
+_INVOCATION_ID = uuid.uuid4().hex
+_command = ""
 
 
 def set_wait_indicator(factory) -> None:
     """Install (or clear, with None) the indicator shown while a request is in flight."""
     global _wait_indicator
     _wait_indicator = factory
+
+
+def set_command(label: str) -> None:
+    """Name the running command for the activity summary, e.g. 'run workflow' or 'app'."""
+    global _command
+    _command = label
 
 
 def waiting(method: str):
@@ -113,7 +130,13 @@ class ApiClient:
     # --- internals -----------------------------------------------------------
 
     def _headers(self) -> dict:
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": device.user_agent(),
+            "X-Sagex-Invocation": _INVOCATION_ID,
+        }
+        if _command:
+            headers["X-Sagex-Command"] = _command
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
@@ -151,11 +174,12 @@ class ApiClient:
             body = None
 
         if resp.status_code == 401 and self.api_key:
-            raise ApiError(
-                "Not authenticated — your API key is invalid or was revoked. "
-                "Run: sagex auth login",
-                status=401,
-            )
+            # The server says why a known session stopped working (expired, signed
+            # out, revoked); those messages already end with what to run.
+            errors = body.get("errors") if isinstance(body, dict) else None
+            detail = errors.get("detail") if isinstance(errors, dict) else None
+            usable = isinstance(detail, str) and "sagex auth login" in detail
+            raise ApiError(detail if usable else _NOT_AUTHENTICATED, status=401)
         if resp.status_code in _UNAVAILABLE_STATUSES:
             raise ApiError(
                 "The Autosage server is temporarily unavailable. Please try again later.",

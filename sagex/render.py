@@ -34,6 +34,14 @@ def note(text: str) -> None:
     console.print(Text(text, style="bright_black"))
 
 
+def login_prompt(user_code: str, url: str) -> None:
+    """The one-time code and link for `sagex auth login`."""
+    line = Text("Your one-time code: ")
+    line.append(user_code, style="bold magenta")
+    console.print(line)
+    console.print(Text.assemble("Approve the sign-in at: ", (url, "underline")), soft_wrap=True)
+
+
 # --- live runs (`sagex run`) -----------------------------------------------
 
 def run_header(script_name: str, server_name: str, details: list[str],

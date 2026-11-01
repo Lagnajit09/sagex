@@ -16,7 +16,7 @@ $ sagex list workflow
 └──────────────────────┴──────────────────────────────────────┴──────────┘
 ```
 
-> **Early access.** sagex is invite-only for now. Your account needs an API key: [request one here](https://autosagex.web.app/contact).
+You need an [Autosage account](https://autosagex.web.app/signup) (free).
 
 ## Install
 
@@ -32,7 +32,7 @@ curl -LsSf https://raw.githubusercontent.com/Lagnajit09/sagex/main/scripts/insta
 irm https://raw.githubusercontent.com/Lagnajit09/sagex/main/scripts/install.ps1 | iex
 ```
 
-The installer uses [uv](https://docs.astral.sh/uv/) to install sagex as an isolated tool, and fetches Python 3.11+ for you if needed. Set `SAGEX_VERSION=1.0.0` before running it to pin a version.
+The installer uses [uv](https://docs.astral.sh/uv/) to install sagex as an isolated tool, and fetches Python 3.11+ for you if needed. Set `SAGEX_VERSION=1.1.0` before running it to pin a version.
 
 **Already have a Python tool manager?** Any of these works (Python 3.11 or newer):
 
@@ -45,7 +45,7 @@ pip install sagex-cli
 ## Quick start
 
 ```sh
-sagex auth login              # paste your API key (stored in your OS keychain)
+sagex auth login              # approve this device in your browser
 sagex                         # open the terminal app
 sagex list workflow           # or run single commands
 sagex run workflow "Deploy"   # run a workflow and follow it live, node by node
@@ -76,7 +76,7 @@ Resources can be referred to by **name or id**. An id prefix works for runs. Mos
 
 | Group | Commands | What it does |
 |---|---|---|
-| `auth` | `login` · `status` · `logout` | Store, check or remove your API key |
+| `auth` | `login` · `status` · `logout` | Sign in with your browser (or `--with-token`), see who you're signed in as, sign out |
 | `list` | `workflow` · `script` · `run` · `trigger` · `vault` · `server` · `key` | Compact tables of your resources |
 | `show` | `workflow` · `script` · `run` · `trigger` · `vault` · `server` · `key` | One resource in detail; `show run --logs` prints node output, `show key --reveal` shows secrets after confirming |
 | `render` | `workflow` | Draw a workflow as a flow tree (from the server, or a local file with `--file`) |
@@ -119,9 +119,18 @@ logs/script/<id>/        saved by sagex run script
 logs/workflow/<run_id>/  saved by sagex run workflow / trigger fire
 ```
 
+## Signing in
+
+`sagex auth login` prints a one-time code and opens Autosage in your browser. Check the code matches, approve, and you're in. On a server or over SSH, open the link on any device instead.
+
+Each sign-in is a **session**. Your [Autosage profile](https://autosagex.web.app/profile#sagecode) lists them all, with the device, SageCode version, when it was last active, and how many commands and runs it has started, and can revoke any of them. Sessions unused for 90 days expire. `sagex auth logout` signs this machine out.
+
+**CI and scripts:** create an **access token** on your profile and set it as `SAGEX_API_KEY`, or pipe it in with `sagex auth login --with-token`.
+
 ## Security
 
-- Your API key is stored in the **OS keychain** (Windows Credential Manager, macOS Keychain or Linux Secret Service), never in a plain file.
+- Your session key is stored in the **OS keychain** (Windows Credential Manager, macOS Keychain or Linux Secret Service), never in a plain file.
+- Approving a sign-in, creating tokens and revoking sessions all need you signed in to Autosage in the browser; a SageCode key can't do any of them.
 - Secrets are **never accepted as command-line flags**, so they never show up in shell history. Passwords, SSH keys and passphrases are typed at a hidden prompt or read from a file you point to.
 - Vault credentials **can't be copied** to disk, and `show key` hides secret values unless you pass `--reveal` and confirm.
 - An HTTP trigger's secret is shown **once**, when it's created or rotated.
@@ -130,7 +139,7 @@ logs/workflow/<run_id>/  saved by sagex run workflow / trigger fire
 
 | Setting | Purpose |
 |---|---|
-| `SAGEX_API_KEY` | Use this API key instead of the keychain. Useful for CI or machines without a keychain |
+| `SAGEX_API_KEY` | Use this access token instead of the keychain. For CI or machines without a keychain; create one on your Autosage profile |
 | `SAGEX_API_URL` | Point sagex at a different Autosage server |
 | `SAGEX_DEBUG=1` | Add connection details to network errors |
 | `~/.sagex/config.json` | Saved preferences (workspace, shell) |
@@ -157,7 +166,7 @@ pytest
 
 ## Roadmap
 
-- **v1.1:** see your sagex sessions on your Autosage profile.
+- **v1.1 (shipped):** sign in with your browser, and see and revoke every session on your Autosage profile.
 - **v2:** Autobot in the terminal: chat, generate, run and fix, with your last command's output as context.
 
 ## Links

@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import uuid
+import webbrowser
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +32,8 @@ for _stream in (sys.stdout, sys.stderr):
 from sagex import __version__, config, copier, pusher, render, runner, runview
 from sagex.api import ApiClient, ApiError, build_client, resources
 from sagex.api import store
-from sagex.api.client import set_wait_indicator
+from sagex.api import auth as cli_auth
+from sagex.api.client import set_command, set_wait_indicator
 from sagex.app import SagexApp
 
 app = typer.Typer(
@@ -42,7 +44,7 @@ app = typer.Typer(
     # would include the API key (client.api_key) and any secret being prompted for.
     pretty_exceptions_show_locals=False,
 )
-auth_app = typer.Typer(help="Manage authentication (API key).")
+auth_app = typer.Typer(help="Sign in to Autosage, see who you're signed in as, or sign out.")
 app.add_typer(auth_app, name="auth")
 
 workspace_app = typer.Typer(help="Manage the local workspace folder.")
@@ -83,9 +85,6 @@ app.add_typer(rename_app, name="rename")
 
 run_app = typer.Typer(help="Run a script or workflow now and watch it live.")
 app.add_typer(run_app, name="run")
-
-# Lightweight authenticated endpoint used to verify a key.
-_VERIFY_PATH = "/api/users/profile/"
 
 # ---------------------------------------------------------------------------
 # Workflow scaffold template — embedded in files created by `sagex new workflow`.
@@ -358,9 +357,26 @@ def _default(
 ) -> None:
     """Launch the terminal app when no subcommand is given."""
     if ctx.invoked_subcommand is None:
+        set_command("app")
         SagexApp().run()               # the TUI shows its own loaders, never the CLI line
     else:
+        set_command(_command_label(ctx))
         set_wait_indicator(render.waiting)
+
+
+def _command_label(ctx: typer.Context) -> str:
+    """'run workflow' for `sagex run workflow deploy --watch`: the subcommand path,
+    for the session's activity summary. Arguments and options are never included."""
+    words, command = [], ctx.command
+    for arg in sys.argv[1:]:
+        if arg.startswith("-"):
+            continue
+        sub = getattr(command, "commands", {}).get(arg)
+        if sub is None:
+            break
+        words.append(arg)
+        command = sub
+    return " ".join(words)
 
 
 @app.command("syntax")
@@ -383,49 +399,151 @@ def syntax_cmd(
     typer.echo(json.dumps(snippet, indent=2))
 
 
-@auth_app.command("login")
-def auth_login() -> None:
-    """Log in with your sagex API key (paste it when prompted)."""
-    render.note(f"sagex is in early access — API keys are issued on request: {config.WEB_URL}/contact")
-    key = typer.prompt("Paste your sagex API key", hide_input=True).strip()
-    if not key:
-        typer.echo("No key entered.")
-        raise typer.Exit(code=1)
-    if not key.startswith("sgx_"):
-        typer.echo("✗ That doesn't look like a sagex API key (they start with sgx_).")
+_SESSIONS_PAGE = f"{config.WEB_URL}/profile#sagecode"
+
+_KIND_LABELS = {"device": "Device session", "token": "Access token", "admin": "Issued key"}
+
+
+def _no_keychain_help(what: str) -> None:
+    typer.echo(f"✗ No OS keychain is available on this machine to store {what}.")
+    typer.echo(f"  Create an access token on your Autosage profile ({_SESSIONS_PAGE})")
+    typer.echo(f"  and set it in your environment instead:  {store.ENV_VAR}=<token>")
+
+
+def _open_browser(url: str) -> bool:
+    """Open `url` in a browser when there's a display to show it on.
+
+    Over SSH, or on Linux with no display, Python would fall back to a text browser
+    that takes over the terminal, so the link is just printed instead.
+    """
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False
+    if sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        return False
+    try:
+        return webbrowser.open(url, new=2)
+    except webbrowser.Error:
+        return False
+
+
+def _end_session(key: str) -> str | None:
+    """Sign out the session behind `key`, unless it's an access token (which may be
+    shared with CI, so it's left for the user to revoke on their profile).
+
+    Returns 'ended', 'kept' (a token) or None (the server couldn't be reached).
+    """
+    client = ApiClient(config.api_url(), key)
+    try:
+        session = (client.get(cli_auth.CURRENT_PATH) or {}).get("session") or {}
+        if session.get("kind") == "token":
+            return "kept"
+        client.delete(cli_auth.CURRENT_PATH)
+        return "ended"
+    except ApiError as exc:
+        return "ended" if exc.status == 401 else None    # 401: it was already dead
+
+
+def _login_with_browser(no_browser: bool) -> tuple[str, str]:
+    """The device flow: show a code, let the user approve it on the web, collect the
+    new key. Returns (key, ' as <email> on <device>')."""
+    client = ApiClient(config.api_url(), None)        # never send an old key here
+    try:
+        start = cli_auth.start_login(client)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
 
-    # Verify BEFORE storing, so a mistyped or revoked key never lands in the keychain.
-    # Only a 401/403 proves the key is bad; if the server is down we can't tell, so
-    # save it anyway and say it's unverified.
-    problem = None
+    render.login_prompt(start.user_code, start.verification_uri_complete)
+    if not no_browser and _open_browser(start.verification_uri_complete):
+        render.note("Opened your browser. Check the code matches, then approve.")
+    else:
+        render.note(f"Open the link on any device, or go to {start.verification_uri} and enter the code.")
+
     try:
-        ApiClient(config.api_url(), key).get(_VERIFY_PATH)
+        with render.run_activity(render.RunActivity("Waiting for approval", "ctrl+c to cancel")):
+            result = cli_auth.wait_for_approval(client, start)
+    except KeyboardInterrupt:
+        typer.echo("Sign-in cancelled.")
+        raise typer.Exit(code=130)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    who = f" as {result.email}" if result.email else ""
+    return result.api_key, f"{who} on {result.session_name}"
+
+
+def _login_with_token() -> tuple[str, str]:
+    """Take an access token from stdin (piped) or a hidden prompt and check it.
+    Returns (key, ' as <email>')."""
+    if sys.stdin.isatty():
+        key = typer.prompt("Paste your access token", hide_input=True).strip()
+    else:
+        key = sys.stdin.readline().strip()
+    if not key:
+        typer.echo("No token entered.")
+        raise typer.Exit(code=1)
+    if not key.startswith("sgx_"):
+        typer.echo("✗ That doesn't look like a SageCode token (they start with sgx_).")
+        raise typer.Exit(code=1)
+
+    # Verify BEFORE storing, so a mistyped or revoked token never lands in the
+    # keychain. Only a 401/403 proves it's bad; if the server is down we can't
+    # tell, so it's saved anyway and reported as unverified.
+    try:
+        data = ApiClient(config.api_url(), key).get(cli_auth.CURRENT_PATH) or {}
     except ApiError as exc:
         if exc.status in (401, 403):
-            typer.echo("✗ That key wasn't accepted — check you pasted all of it, or request a new one.")
+            typer.echo(f"✗ That token wasn't accepted. {exc.message}")
             raise typer.Exit(code=1)
-        problem = exc.message
+        typer.echo(f"Couldn't verify the token right now: {exc.message}")
+        return key, ""
+    email = (data.get("user") or {}).get("email")
+    return key, f" as {email}" if email else ""
+
+
+@auth_app.command("login")
+def auth_login(
+    with_token: bool = typer.Option(
+        False, "--with-token",
+        help="Use an access token instead of the browser: piped on stdin, or pasted at a "
+             "hidden prompt. Create tokens on your Autosage profile.",
+    ),
+    no_browser: bool = typer.Option(
+        False, "--no-browser",
+        help="Don't open a browser; print the link to open on any device (e.g. over SSH).",
+    ),
+) -> None:
+    """Sign in to Autosage: approve this device in your browser."""
+    if not store.keychain_available():
+        _no_keychain_help("your session")
+        raise typer.Exit(code=1)
+    previous = store.keychain_key()
+
+    key, who = _login_with_token() if with_token else _login_with_browser(no_browser)
 
     try:
         store.set_key(key)
     except store.KeyStoreError:
-        typer.echo("✗ No OS keychain is available on this machine to store the key.")
-        typer.echo(f"  Set it in your environment instead:  {store.ENV_VAR}=<your key>")
+        if not with_token:
+            _end_session(key)          # don't leave an unusable session behind
+        _no_keychain_help("your session")
         raise typer.Exit(code=1)
 
-    if problem:
-        typer.echo("Key saved to your OS keychain, but it couldn't be verified right now:")
-        typer.echo(f"  {problem}")
-    else:
-        typer.echo("✓ Logged in — key saved to your OS keychain.")
+    # One session per machine: end the one this login replaces.
+    if previous and previous != key:
+        _end_session(previous)
+
+    typer.echo(f"✓ Logged in to Autosage{who}.")
     if store.key_from_env():
-        render.note(f"{store.ENV_VAR} is set in your environment and takes precedence over the saved key.")
+        render.note(f"{store.ENV_VAR} is set in your environment and takes precedence over this login.")
 
 
 @auth_app.command("status")
 def auth_status() -> None:
-    """Show whether you're logged in, and check the key still works."""
+    """Show who you're logged in as, and check the session still works."""
     key = store.get_key()
     if not key:
         typer.echo("Not logged in. Run:  sagex auth login")
@@ -433,22 +551,43 @@ def auth_status() -> None:
 
     client = build_client()
     try:
-        client.get(_VERIFY_PATH)
+        data = client.get(cli_auth.CURRENT_PATH) or {}
     except ApiError as exc:
         typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
 
+    session, user = data.get("session") or {}, data.get("user") or {}
     # Name the server only when it isn't the hosted one (i.e. a SAGEX_API_URL override).
     where = "" if client.base_url == config.DEFAULT_API_URL else f" at {client.base_url}"
+    who = f" as {user['email']}" if user.get("email") else ""
     source = f" via {store.ENV_VAR}" if store.key_from_env() else ""
-    typer.echo(f"✓ Logged in to Autosage{where} · key sgx_…{key[-4:]}{source}")
+    typer.echo(f"✓ Logged in to Autosage{where}{who}{source}")
+
+    kind = _KIND_LABELS.get(session.get("kind"), "Session")
+    commands, runs = session.get("commands_run", 0), session.get("runs_started", 0)
+    render.note(f"  {kind}: {session.get('name') or 'unnamed'} · sgx_…{session.get('last4') or key[-4:]}")
+    render.note(f"  Activity: {commands} command{'s' if commands != 1 else ''} · "
+                f"{runs} run{'s' if runs != 1 else ''} started")
+    render.note(f"  Manage your sessions: {_SESSIONS_PAGE}")
 
 
 @auth_app.command("logout")
 def auth_logout() -> None:
-    """Remove the stored API key from your OS keychain."""
-    store.delete_key()
-    typer.echo("Logged out — API key removed from your OS keychain.")
+    """Sign this machine out of Autosage and remove its session from your OS keychain."""
+    key = store.keychain_key()
+    if not key:
+        typer.echo("Not logged in on this machine (no saved session).")
+    else:
+        outcome = _end_session(key)
+        store.delete_key()
+        if outcome == "ended":
+            typer.echo("Logged out — this machine's session is signed out and removed from your OS keychain.")
+        elif outcome == "kept":
+            typer.echo("Logged out — the access token was removed from your OS keychain.")
+            render.note(f"The token itself still works (e.g. in CI). Revoke it on your profile: {_SESSIONS_PAGE}")
+        else:
+            typer.echo("Logged out — removed from your OS keychain.")
+            render.note(f"Couldn't reach Autosage to end the session; revoke it on your profile: {_SESSIONS_PAGE}")
     if store.key_from_env():
         render.note(f"{store.ENV_VAR} is still set in your environment, so sagex will keep using it.")
 

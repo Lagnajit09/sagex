@@ -1,7 +1,7 @@
 # Publishes a release when a version tag is pushed — and only then (no path filter:
 # it never runs for ordinary pushes to main):
 #
-#   git tag v1.0.0 && git push origin v1.0.0
+#   git tag v1.1.0 && git push origin v1.1.0
 #
 # PyPI upload uses Trusted Publishing (OIDC) — no API token is stored in GitHub.
 # One-time setup on pypi.org: add a trusted publisher for project "sagex-cli",

@@ -28,7 +28,7 @@
   <!-- chrome:header -->
   <header class="site-header">
     <div class="container">
-      <a class="brand" href="index.html" aria-label="SageCode home"><img class="brand-mark on-dark" src="assets/img/mark-dark.svg" alt="" width="32" height="28"><img class="brand-mark on-light" src="assets/img/mark-light.svg" alt="" width="32" height="28"><span class="wordmark">Sage<b>Code</b></span><small>v1.0</small></a>
+      <a class="brand" href="index.html" aria-label="SageCode home"><img class="brand-mark on-dark" src="assets/img/mark-dark.svg" alt="" width="32" height="28"><img class="brand-mark on-light" src="assets/img/mark-light.svg" alt="" width="32" height="28"><span class="wordmark">Sage<b>Code</b></span><small>v1.1</small></a>
       <nav class="nav" aria-label="Main">
         <a href="index.html#features">Features</a>
         <a href="install.html">Install</a>
@@ -69,16 +69,37 @@
           </div>
         </section>
 
-        <section class="log-entry" id="v1.1">
-          <div class="meta"><span class="ver">v1.1</span><time>Planned</time><span class="release"><span class="state">planned</span></span></div>
+        <section class="log-entry" id="v1.1.0">
+          <div class="meta"><span class="ver">v1.1.0</span><time datetime="2026-11">Nov 2026</time><span class="release"><span class="state live">live</span></span></div>
           <div>
-            <h2>Sessions on your profile</h2>
-            <p>See your SageCode sessions on your Autosage account page.</p>
+            <h2>Open to everyone, with sessions on your profile</h2>
+            <p>No invite needed: sign in with your Autosage account through your browser. Every sign-in is a session you can see and revoke on your Autosage profile.</p>
+
+            <h3>Added</h3>
+            <ul>
+              <li><code>sagex auth login</code> signs in through your browser: it shows a one-time code, you check it matches and approve. Works over SSH too: open the link on any device (<code>--no-browser</code> just prints it).</li>
+              <li><code>sagex auth login --with-token</code> for CI and scripts: pipe in an access token created on your Autosage profile.</li>
+              <li><code>sagex auth status</code> shows the account, the session and its activity.</li>
+              <li>Your Autosage profile lists every SageCode session (device, system, version, last active, commands run, runs started) and can revoke any of them.</li>
+              <li>A security email when SageCode signs in on a new device.</li>
+            </ul>
+
+            <h3>Changed</h3>
+            <ul>
+              <li><code>sagex auth logout</code> also signs the session out on the server (access tokens keep working, as CI may share them). Signing in again replaces the machine's previous session.</li>
+              <li>Sessions unused for 90 days expire. When a session stops working, SageCode says why: expired, signed out or revoked.</li>
+            </ul>
+
+            <h3>Fixed</h3>
+            <ul>
+              <li>The terminal app's header reads "sagex", and its welcome banner wraps on narrow terminals.</li>
+            </ul>
+            <p><a href="https://github.com/Lagnajit09/sagex/releases/tag/v1.1.0">Release on GitHub</a> · <a href="https://pypi.org/project/sagex-cli/1.1.0/">sagex-cli 1.1.0 on PyPI</a></p>
           </div>
         </section>
 
         <section class="log-entry" id="v1.0.0">
-          <div class="meta"><span class="ver">v1.0.0</span><time datetime="2026-10-29">29 Oct 2026</time><span class="release"><span class="state live">live</span></span></div>
+          <div class="meta"><span class="ver">v1.0.0</span><time datetime="2026-10-29">29 Oct 2026</time><span class="release"><span class="state">shipped</span></span></div>
           <div>
             <h2>The first public release</h2>
             <p>Everything the Autosage web app does, from your terminal. Install it with <code>uv tool install sagex-cli</code>, or see <a href="install.html">Install</a>.</p>
@@ -141,7 +162,7 @@
           <ul><li><a href="https://github.com/Lagnajit09/sagex">GitHub</a></li><li><a href="https://pypi.org/project/sagex-cli/">PyPI</a></li><li><a href="https://github.com/Lagnajit09/sagex/issues">Report an issue</a></li><li><a href="https://github.com/Lagnajit09/sagex/blob/main/LICENSE">MIT license</a></li></ul>
         </div>
       </div>
-      <div class="footer-bottom"><span>© 2026 SageCode · MIT licensed</span><span>sagex-cli 1.0.0</span></div>
+      <div class="footer-bottom"><span>© 2026 SageCode · MIT licensed</span><span>sagex-cli 1.1.0</span></div>
     </div>
   </footer>
   <!-- /chrome:footer -->
