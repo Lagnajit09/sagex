@@ -36,7 +36,7 @@
     document.addEventListener("click", (e) => {
       if (header.classList.contains("menu-open") && !header.contains(e.target)) setMenu(false);
     });
-    window.matchMedia("(min-width: 901px)").addEventListener("change", (e) => { if (e.matches) setMenu(false); });
+    window.matchMedia("(min-width: 1041px)").addEventListener("change", (e) => { if (e.matches) setMenu(false); });
   }
 
   /* ── Install tabs: OS-aware default, kept in sync across the page ───── */

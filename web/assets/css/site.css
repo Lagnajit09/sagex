@@ -249,6 +249,7 @@ code, kbd, pre, .mono { font-family: var(--font-mono); }
 .menu-open .menu-toggle .i-open { display: none; }
 .menu-open .menu-toggle .i-close { display: block; }
 .nav .nav-cta { display: none; }        /* the menu's Install button: phones only */
+.nav .nav-ext { display: none; }        /* the menu's Autosage and docs links: the header icons on desktop */
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
 
@@ -760,11 +761,14 @@ mark { background: var(--brand-soft); color: inherit; border-radius: 3px; paddin
   .arch-step:nth-child(2)::after { display: none; }
 }
 
-@media (max-width: 900px) {
-  /* Header: links move into a dropdown panel. */
+/* Header: links move into a dropdown panel. Its own breakpoint, above the 900px layout one: the
+   full nav plus five header icons and Install needs ~990px. site.js closes the menu above it. */
+@media (max-width: 1040px) {
   .nav { display: none; }
   .menu-toggle { display: inline-grid; }
   .header-actions .btn { display: none; }
+  /* Like Install, the Autosage and docs links move into the menu. */
+  .header-actions .ref-btn { display: none; }
   /* With the nav links hidden, nothing pushes the buttons right — so they do it themselves. */
   .header-actions { margin-left: auto; }
   .site-header.menu-open .nav {
@@ -779,7 +783,11 @@ mark { background: var(--brand-soft); color: inherit; border-radius: 3px; paddin
   .site-header.menu-open .nav a[aria-current="page"] { color: var(--brand-2); }
   [data-theme="light"] .site-header.menu-open .nav a[aria-current="page"] { color: var(--brand); }
   .site-header.menu-open .nav .nav-cta { display: inline-flex; margin-top: 18px; height: 46px; color: var(--btn-fg); }
+  .site-header.menu-open .nav .nav-ext { display: flex; align-items: center; justify-content: space-between; }
+  .nav-ext svg { width: 16px; height: 16px; color: var(--text-3); }
+}
 
+@media (max-width: 900px) {
   .map { grid-template-columns: minmax(0, 1fr); gap: 48px; margin-top: 64px; }
   .map-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .map-col-label { grid-column: 1 / -1; }

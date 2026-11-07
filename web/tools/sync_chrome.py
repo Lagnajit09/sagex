@@ -6,6 +6,9 @@ for footer); this rewrites those blocks, pointing in-page links back at
 index.html and marking the current page's nav link with aria-current. Pages
 stay plain, hand-editable HTML.
 
+The markers may sit at any indent (a formatter can re-indent index.html); each
+copied block is shifted to the indent of the page's own markers.
+
     python web/tools/sync_chrome.py
 """
 
@@ -14,15 +17,22 @@ import sys
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[1]
-BLOCK = r"(  <!-- chrome:{0} -->\n)(.*?)(  <!-- /chrome:{0} -->\n)"
+BLOCK = r"((?P<indent>[ \t]*)<!-- chrome:{0} -->\n)(.*?)([ \t]*<!-- /chrome:{0} -->\n)"
 STANDALONE = {"404.html"}     # served at any depth, so it has its own root-relative chrome
 
 
-def block(html: str, name: str) -> str:
+def block(html: str, name: str) -> tuple[str, str]:
     m = re.search(BLOCK.format(name), html, flags=re.S)
     if not m:
         raise SystemExit(f"index.html has no chrome:{name} block")
-    return m.group(2)
+    return m.group(3), m.group("indent")
+
+
+def reindent(chrome: str, src: str, dst: str) -> str:
+    if src == dst:
+        return chrome
+    return "".join(dst + line[len(src):] if line.startswith(src) else line
+                   for line in chrome.splitlines(keepends=True))
 
 
 def for_page(chrome: str, page: str, mark_current: bool) -> str:
@@ -42,14 +52,16 @@ def main() -> None:
             continue
         html = path.read_text(encoding="utf-8")
         new = html
-        for name, chrome in (("header", header), ("footer", footer)):
+        for name, (chrome, indent) in (("header", header), ("footer", footer)):
             if not re.search(BLOCK.format(name), new, flags=re.S):
                 print(f"skip {path.name}: no chrome:{name} block", file=sys.stderr)
                 continue
-            new = re.sub(BLOCK.format(name), lambda m: m.group(1) + for_page(chrome, path.name, name == "header") + m.group(3),
+            new = re.sub(BLOCK.format(name),
+                         lambda m: m.group(1) + reindent(for_page(chrome, path.name, name == "header"), indent, m.group("indent"))
+                         + m.group(4),
                          new, count=1, flags=re.S)
         if new != html:
-            path.write_text(new, encoding="utf-8")
+            path.write_text(new, encoding="utf-8", newline="\n")    # the pages are LF; don't let Windows make them CRLF
             changed += 1
             print(f"synced {path.name}")
     print(f"{changed} page(s) updated")
