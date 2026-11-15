@@ -33,7 +33,7 @@ def _baked(name: str) -> str:
 DEFAULT_API_URL = _baked("SAGEX_API_URL")
 
 # The Autosage web app — where users approve sign-ins, manage their sessions and
-# (until sagex v2) chat with Autobot.
+# their Autobot settings (e.g. a personal LLM key, which Sage uses too).
 WEB_URL = _baked("SAGEX_WEB_URL")
 
 # Every setting the app understands, with its default value.
@@ -71,6 +71,16 @@ def api_url() -> str:
     (e.g. the TUI remembering your shell) never writes it into config.json.
     """
     return os.environ.get("SAGEX_API_URL", "").strip() or load()["api_url"]
+
+
+def ai_url() -> str:
+    """Where Autobot (and Sage) live: SAGEX_AI_URL, else `<api_url>/api/ai`.
+
+    In prod and the local docker stack, nginx serves Autobot under /api/ai/ on the
+    same host as the API, so the default is right; override only when running
+    Autobot on its own port (e.g. SAGEX_AI_URL=http://localhost:8030).
+    """
+    return (os.environ.get("SAGEX_AI_URL", "").strip() or f"{api_url()}/api/ai").rstrip("/")
 
 
 def resolve_workspace(path: str) -> str:

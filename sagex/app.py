@@ -15,6 +15,7 @@ from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 from sagex import config, runview, shell
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import ACCENT, run_label, trigger_label
+from sagex.sage import SageError, SageSession, command_context
 from sagex.widgets.activity import ActivityLine
 from sagex.widgets.message import ChatMessage
 from sagex.widgets.run_graph import RunGraph
@@ -41,7 +42,10 @@ class SagexApp(App):
         super().__init__()
         self.config = config.load()                       # persisted settings (~/.sagex)
         self.session = shell.ShellSession(preferred=self.config.get("shell"))
-        self._busy = False                                # is a command currently running?
+        self._busy = False                                # is a command or Sage reply in progress?
+        self._sage = SageSession()                        # one conversation, connected on first use
+        self._sage_turn = False                           # is the busy thing a Sage reply?
+        self._last_command: dict | None = None            # context for the next Sage question
         self._selected_label: str | None = None                  # the highlighted resource, if any
         self._run_graph: RunGraph | None = None           # live graph of the running command
         self._load_gen = 0                                # bumps on every (re)load
@@ -57,7 +61,7 @@ class SagexApp(App):
         """Declare WHAT is on screen, top to bottom."""
         yield Header(show_clock=True)
 
-        # Horizontal split: resources on the left, Autobot panel on the right.
+        # Horizontal split: resources on the left, the terminal (commands + Sage) on the right.
         with Horizontal():
             # Left: the tree, plus a one-line status bar docked at its bottom.
             with Vertical(id="resources-panel"):
@@ -79,7 +83,7 @@ class SagexApp(App):
                 with Horizontal(id="prompt-row"):
                     yield Static("❯ ", id="prompt-glyph")
                     yield PromptInput(
-                        placeholder="Start with ! to run a command — e.g. !sagex list workflow",
+                        placeholder="Ask Sage, or start with ! to run a command — e.g. !sagex list workflow",
                         id="chat-input",
                         compact=True,
                     )
@@ -97,7 +101,10 @@ class SagexApp(App):
         text.append("!", style="bold")
         text.append(" to run a command, e.g. ", style="bright_black")
         text.append("!sagex list workflow\n", style="bold")
-        text.append("Autobot chat arrives in sagex v2\n", style="bright_black")
+        text.append("Anything else goes to ", style="bright_black")
+        text.append("Sage", style=f"bold {ACCENT}")
+        text.append(", your Autosage assistant — ask why your last command failed\n",
+                    style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
                     style="bright_black")
         return text
@@ -169,14 +176,44 @@ class SagexApp(App):
             out = self._new_output_message()            # its output streams in below
             self._set_busy(True)
             self.execute_command(command, out)
-        else:                            # otherwise -> agent prompt (Autobot lands in v2)
+        else:                            # otherwise -> a question for Sage
             self.add_message(text, role="user")
-            self.add_message(
-                "Autobot isn't available in the terminal yet — it's coming in sagex v2.\n"
-                "Meanwhile, start a line with ! to run a command (try !sagex --help), "
-                f"or chat with Autobot on the web: {config.WEB_URL}/ai/autobot",
-                role="notice",
-            )
+            if not store.get_key():
+                self.add_message("Sign in to talk to Sage: run !sagex auth login", role="notice")
+                return
+            context = {"last_command": self._last_command} if self._last_command else None
+            self._last_command = None    # shared once; Sage remembers it from here
+            self._sage_turn = True
+            self._set_busy(True, "Thinking")
+            self.ask_sage(text, context)
+
+    @work(group="sage")
+    async def ask_sage(self, text: str, context: dict | None) -> None:
+        """Stream Sage's reply into the transcript (on the app's own event loop)."""
+        activity = self.query_one("#command-activity", ActivityLine)
+        reply: ChatMessage | None = None
+        try:
+            async for frame in self._sage.turn(text, context):
+                kind = frame.get("type")
+                if kind == "token":
+                    if reply is None:
+                        reply = ChatMessage("", "sage")
+                        self._mount_entry(reply)
+                        activity.set("Responding")
+                    reply.append_text(frame.get("text", ""))
+                    self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
+                elif kind == "reconnected":
+                    self.add_message("Started a new conversation — Sage doesn't remember the "
+                                     "earlier one yet.", role="notice")
+                elif kind == "done" and frame.get("cancelled"):
+                    self.add_message("Stopped.", role="notice")
+                elif kind == "error":
+                    self.add_message(frame.get("message") or "Sage couldn't answer.", role="notice")
+        except SageError as exc:
+            self.add_message(exc.message, role="notice")
+        finally:
+            self._sage_turn = False
+            self._set_busy(False)
 
     @work(thread=True)
     def execute_command(self, command: str, out: ChatMessage) -> None:
@@ -198,7 +235,7 @@ class SagexApp(App):
             self.call_from_thread(self._append_output, out, f"Failed to run command: {exc}")
             code = -1
 
-        self.call_from_thread(self._finish_command, out, code)
+        self.call_from_thread(self._finish_command, out, code, command)
 
     def _new_output_message(self) -> ChatMessage:
         """(main thread) Insert an empty cmd_output entry and return it."""
@@ -212,16 +249,17 @@ class SagexApp(App):
         log.mount(widget, before=self.query_one("#command-activity", ActivityLine))
         self.call_after_refresh(log.scroll_end, animate=False)
 
-    def _set_busy(self, busy: bool) -> None:
-        """While a command runs, the prompt line gives way to the activity line — as
-        in a terminal — and comes back (with the cursor on it) when it finishes."""
+    def _set_busy(self, busy: bool, verb: str = "Running") -> None:
+        """While a command runs (or Sage answers), the prompt line gives way to the
+        activity line — as in a terminal — and comes back (with the cursor on it)
+        when it finishes."""
         self._busy = busy
         activity = self.query_one("#command-activity", ActivityLine)
         self.query_one("#prompt-row").display = not busy
         self.query_one("#prompt-status").display = not busy
         log = self.query_one("#chat-log", VerticalScroll)
         if busy:
-            activity.start("Running", "esc to stop")
+            activity.start(verb, "esc to stop")
             log.focus()                  # keys scroll the output instead of typing nowhere
         else:
             activity.stop()
@@ -247,13 +285,21 @@ class SagexApp(App):
         self._mount_entry(ChatMessage(text, role))
 
     def action_stop_command(self) -> None:
-        """Esc: stop the currently running command, if any."""
+        """Esc: stop the running command, or Sage's reply, if any."""
         if self._busy:
             self.query_one("#command-activity", ActivityLine).set("Stopping", "")
+        if self._sage_turn:
+            self.run_worker(self._sage.cancel(), group="sage-cancel")   # Sage replies done{cancelled}
+            return
         self.session.cancel()            # kills the process; the worker then finishes
 
-    def _finish_command(self, out: ChatMessage, code: int) -> None:
+    async def on_unmount(self) -> None:
+        await self._sage.close()
+
+    def _finish_command(self, out: ChatMessage, code: int, command: str = "") -> None:
         """(main thread) A command finished: show how it ended and bring the prompt back."""
+        # Remember it so a follow-up question to Sage ("why did that fail?") has context.
+        self._last_command = command_context(command, code, out.body)
         out.set_exit_code(code)
         if out.is_empty:                 # a silent success leaves no empty block behind
             out.remove()

@@ -2,6 +2,16 @@
 
 All notable changes to sagex are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Sage**, your Autosage assistant, in the terminal app: type a question (no `!`) and the reply streams into the transcript as Markdown. Esc stops a reply.
+- Ask about the command you just ran: the next question carries its output (tail only, with obvious secrets masked; never for `--reveal` or environment dumps).
+- `SAGEX_AI_URL` to point sagex at an Autobot running on its own port (defaults to `<api url>/api/ai`).
+
+Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. It can't run commands yet; it tells you what to run.
+
 ## [1.1.0] - 2026-11-01
 
 Open to every Autosage account: sign in with your browser, no invite needed. Every sign-in is a session you can see and revoke on your Autosage profile.

@@ -48,6 +48,7 @@ dependencies = [
     "keyring>=25.7.0,<26",
     "typer>=0.27.2,<0.28",
     "cron-descriptor>=2.1.0,<3",
+    "websockets>=14,<17",                 # Sage, the terminal agent (one socket per conversation)
 ]
 
 [project.optional-dependencies]

@@ -2,15 +2,18 @@
 
 Entries read like a terminal session rather than chat bubbles. Each role has a
 CSS class:
-  - "user"       : a line you typed for Autobot         ❯ how do I …
+  - "user"       : a line you typed for Sage             ❯ how do I …
   - "command"    : a shell command you ran (! prefix)    ❯ !ls
   - "cmd_output" : that command's output, indented below it
-  - "autobot"    : Autobot's reply                       ● …
+  - "sage"       : Sage's reply, rendered as Markdown     ● …
   - "notice"     : a dim note from sagex itself          ○ …
 
-Output entries grow line by line as a command streams (see append_line).
+Output entries grow line by line as a command streams (see append_line); Sage's
+reply grows token by token (see append_text).
 """
 
+from rich.markdown import Markdown
+from rich.table import Table
 from rich.text import Text
 
 from textual.widgets import Static
@@ -27,7 +30,7 @@ class ChatMessage(Static):
         height: auto;
         padding: 0;
     }
-    ChatMessage.user, ChatMessage.command, ChatMessage.autobot, ChatMessage.notice {
+    ChatMessage.user, ChatMessage.command, ChatMessage.sage, ChatMessage.notice {
         margin-top: 1;                       /* a blank line before each new turn */
     }
     ChatMessage.cmd_output, ChatMessage.notice {
@@ -47,17 +50,28 @@ class ChatMessage(Static):
         self._rebuild()
 
     @property
+    def body(self) -> str:
+        return self._body
+
+    @property
     def is_empty(self) -> bool:
         return not self._body and self._exit_code in (None, 0)
 
     def _rebuild(self) -> None:
+        if self._role == "sage":
+            # Markdown in a 2-column grid so wrapped lines stay indented under "● ".
+            grid = Table.grid(padding=0)
+            grid.add_column(width=2, no_wrap=True)
+            grid.add_column(ratio=1)
+            grid.add_row(Text("● ", style=ACCENT), Markdown(self._body or " "))
+            self.update(grid)
+            return
+
         content = Text()
         if self._role in ("user", "command"):
             content.append("❯ ", style=f"bold {ACCENT}")
             if self._role == "command":
                 content.append("!", style="bright_black")
-        elif self._role == "autobot":
-            content.append("● ", style=ACCENT)
         elif self._role == "notice":
             content.append("○ ")
         content.append(self._body)
@@ -70,6 +84,11 @@ class ChatMessage(Static):
     def append_line(self, line: str) -> None:
         """Add one line to the body (used for streaming command output)."""
         self._body = f"{self._body}\n{line}" if self._body else line
+        self._rebuild()
+
+    def append_text(self, piece: str) -> None:
+        """Add a fragment to the body as-is (used for Sage's streamed reply)."""
+        self._body += piece
         self._rebuild()
 
     def set_exit_code(self, code: int) -> None:

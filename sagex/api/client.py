@@ -127,6 +127,10 @@ class ApiClient:
                 ) from exc
             raise _connection_error(_UNREACHABLE, self.base_url, exc) from exc
 
+    def identity_headers(self) -> dict:
+        """The key + activity headers every request carries (also used by Sage's socket)."""
+        return self._headers()
+
     # --- internals -----------------------------------------------------------
 
     def _headers(self) -> dict:
