@@ -4,8 +4,12 @@ The socket lives at `<ai_url>/sage/ws` and authenticates with this session's API
 key (the same headers every sagex request sends). Protocol, in short (full
 version: autobot's sage/conversation.py):
 
-    → {"type": "turn", "text": ..., "context": {...}}     → {"type": "cancel"}
-    ← ready · token{text} · done{cancelled, model, usage} · error{code, message, fatal}
+    → hello{index, tools} (once)  · turn{text, context}  · tool_result{id, …}  · cancel
+    ← ready{features} · hello{tools} · token{text} · tool_call{id, name, args}
+      · done{cancelled, model, usage} · error{code, message, fatal}
+
+A `tool_call` is answered by the app (sage_tools decides whether it may run)
+with `send_tool_result` while `turn()` waits for the next frame.
 
 Async on purpose: the TUI runs it as a Textual worker on the app's own loop, so
 tokens land in the transcript without thread hops.
@@ -16,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Callable
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketException
@@ -61,6 +66,12 @@ def socket_url() -> str:
     return f"{base}/sage/ws"
 
 
+def scrub(text: str) -> str:
+    """Mask obvious secrets (SageCode keys, `password=…`-style values) in output."""
+    text = _API_KEY.sub("sgx_*****", text)
+    return _SECRET_ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}*****", text)
+
+
 def command_context(command: str, exit_code: int, output: str) -> dict | None:
     """The `last_command` context for Sage, or None when it shouldn't be shared.
 
@@ -71,17 +82,23 @@ def command_context(command: str, exit_code: int, output: str) -> dict | None:
     if not command or _NEVER_CONTEXT.search(command):
         return None
     tail = "\n".join((output or "").splitlines()[-_CONTEXT_LINES:])[-_CONTEXT_CHARS:]
-    tail = _API_KEY.sub("sgx_*****", tail)
-    tail = _SECRET_ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}*****", tail)
-    return {"command": command[:500], "exit_code": exit_code, "output": tail}
+    return {"command": command[:500], "exit_code": exit_code, "output": scrub(tail)}
 
 
 class SageSession:
-    """A conversation with Sage. Connects lazily; reconnects after a drop."""
+    """A conversation with Sage. Connects lazily; reconnects after a drop.
 
-    def __init__(self) -> None:
+    `hello` builds the frame that offers Sage this CLI's tools (command index +
+    tool names); it's sent once per connection, only to a server whose `ready`
+    lists the "tools" feature.
+    """
+
+    def __init__(self, hello: Callable[[], dict] | None = None) -> None:
         self._ws: ClientConnection | None = None
         self._ever_connected = False
+        self._hello = hello
+        self.tools: list[str] = []           # what the server accepted for this connection
+        self._notice: str | None = None      # e.g. the server couldn't use the index
 
     @property
     def connected(self) -> bool:
@@ -116,6 +133,18 @@ class SageSession:
         if first.get("type") != "ready":
             await ws.close()
             raise SageError(first.get("message") or UNREACHABLE, fatal=bool(first.get("fatal")))
+
+        self.tools, self._notice = [], None
+        if self._hello is not None and "tools" in (first.get("features") or []):
+            try:
+                await ws.send(json.dumps({"type": "hello", **self._hello()}))
+                reply = json.loads(await asyncio.wait_for(ws.recv(), _OPEN_TIMEOUT))
+            except (ConnectionClosed, TimeoutError, ValueError) as exc:
+                await ws.close()
+                raise SageError(UNREACHABLE) from exc
+            if reply.get("type") == "hello":
+                self.tools = [t for t in reply.get("tools") or [] if isinstance(t, str)]
+                self._notice = reply.get("message")
         self._ws = ws
 
     async def turn(self, text: str, context: dict | None = None):
@@ -130,6 +159,8 @@ class SageSession:
             self._ever_connected = True
             if reconnecting:
                 yield {"type": "reconnected"}
+            if self._notice:
+                yield {"type": "notice", "message": self._notice}
 
         frame: dict = {"type": "turn", "text": text}
         if context:
@@ -144,6 +175,14 @@ class SageSession:
         except ConnectionClosed as exc:
             self._ws = None
             raise SageError("Lost the connection to Sage mid-reply. Try again.") from exc
+
+    async def send_tool_result(self, frame: dict) -> None:
+        """Answer a `tool_call` (sent while `turn()` is waiting for the next frame)."""
+        if self.connected:
+            try:
+                await self._ws.send(json.dumps(frame))
+            except ConnectionClosed:
+                self._ws = None              # turn() notices on its next recv
 
     async def cancel(self) -> None:
         """Ask Sage to stop the current reply (it answers with done{cancelled})."""

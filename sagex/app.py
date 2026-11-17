@@ -4,7 +4,10 @@ Appearance lives in app.tcss; status formatting in formatting.py. This file
 focuses on WHAT widgets exist and HOW they react.
 """
 
+import asyncio
 import os
+import shlex
+import time
 
 from rich.text import Text
 from textual import events, work
@@ -12,7 +15,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 
-from sagex import config, runview, shell
+from sagex import config, runview, sage_tools, shell
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import ACCENT, run_label, trigger_label
 from sagex.sage import SageError, SageSession, command_context
@@ -20,6 +23,7 @@ from sagex.widgets.activity import ActivityLine
 from sagex.widgets.message import ChatMessage
 from sagex.widgets.run_graph import RunGraph
 from sagex.widgets.prompt_input import PromptInput
+from sagex.widgets.tool_card import ToolCard
 
 
 class SagexApp(App):
@@ -43,8 +47,9 @@ class SagexApp(App):
         self.config = config.load()                       # persisted settings (~/.sagex)
         self.session = shell.ShellSession(preferred=self.config.get("shell"))
         self._busy = False                                # is a command or Sage reply in progress?
-        self._sage = SageSession()                        # one conversation, connected on first use
+        self._sage = SageSession(hello=sage_tools.hello_frame)   # connected on first use
         self._sage_turn = False                           # is the busy thing a Sage reply?
+        self._sage_run: sage_tools.CommandRun | None = None   # a command Sage is running
         self._last_command: dict | None = None            # context for the next Sage question
         self._selected_label: str | None = None                  # the highlighted resource, if any
         self._run_graph: RunGraph | None = None           # live graph of the running command
@@ -169,7 +174,7 @@ class SagexApp(App):
                 return
             if command.lower() in ("clear", "cls"):     # UI builtin: wipe the transcript
                 log = self.query_one("#chat-log", VerticalScroll)
-                for entry in [*log.query(ChatMessage), *log.query(RunGraph)]:
+                for entry in [*log.query(ChatMessage), *log.query(RunGraph), *log.query(ToolCard)]:
                     entry.remove()
                 return
             self.add_message(command, "command")        # echo it, like a terminal does
@@ -202,9 +207,16 @@ class SagexApp(App):
                         activity.set("Responding")
                     reply.append_text(frame.get("text", ""))
                     self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
+                elif kind == "tool_call":
+                    reply = None             # text after the tool goes in a new entry, below it
+                    result = await self._run_sage_tool(frame)
+                    await self._sage.send_tool_result(result)
+                    activity.set("Thinking")
                 elif kind == "reconnected":
                     self.add_message("Started a new conversation — Sage doesn't remember the "
                                      "earlier one yet.", role="notice")
+                elif kind == "notice":
+                    self.add_message(frame.get("message") or "", role="notice")
                 elif kind == "done" and frame.get("cancelled"):
                     self.add_message("Stopped.", role="notice")
                 elif kind == "error":
@@ -214,6 +226,70 @@ class SagexApp(App):
         finally:
             self._sage_turn = False
             self._set_busy(False)
+
+    async def _run_sage_tool(self, frame: dict) -> dict:
+        """Show one Sage tool call as a card, run it if allowed, return its tool_result.
+
+        Whether a command may run is decided here (sage_tools.check), never by
+        which tool Sage picked.
+        """
+        call_id = str(frame.get("id") or "")
+        name = str(frame.get("name") or "")
+        words = [str(w) for w in frame.get("args") or []]
+
+        def refused(card: ToolCard, reason: str) -> dict:
+            card.refuse(reason)
+            return {"type": "tool_result", "id": call_id, "error": reason}
+
+        if name == "sagex_help":
+            card = ToolCard(name, "sagex help " + shlex.join(words), folded_lines=0)
+            self._mount_entry(card)
+            text, error = sage_tools.help_text(words)
+            if error:
+                return refused(card, error)
+            card.set_lines(text.splitlines())
+            card.finish(0, None, sage_saw="Sage read it")
+            return {"type": "tool_result", "id": call_id, "exit_code": 0, "output": text}
+
+        card = ToolCard(name, "sagex " + shlex.join(words))
+        self._mount_entry(card)
+        if name != "sagex_read":
+            return refused(card, f"{name} isn't available in this version of sagex.")
+        check = sage_tools.check(words)
+        if check.error:
+            return refused(card, check.error)
+        if not check.read_only:
+            return refused(card, f"`sagex {' '.join(check.path)}` changes things or runs long, so "
+                                 "sagex_read can't run it. Give the user the `!sagex …` command.")
+
+        width = self.query_one("#chat-log", VerticalScroll).size.width - 6
+        run = sage_tools.CommandRun(words, cwd=self.session.cwd, width=width)
+        self._sage_run = run
+        self.query_one("#command-activity", ActivityLine).set(f"Running sagex {' '.join(check.path)}")
+        started = time.monotonic()
+        try:
+            code = await asyncio.to_thread(
+                run.run, lambda line: self.call_from_thread(self._append_card_line, card, line))
+        except OSError as exc:
+            return refused(card, f"Couldn't start sagex: {exc}")
+        finally:
+            self._sage_run = None
+        elapsed = time.monotonic() - started
+
+        result = sage_tools.result_frame(call_id, code, run, elapsed)
+        if run.timed_out:
+            card.stop(f"stopped after {int(run.timeout)}s")
+        elif run.cancelled:
+            card.stop("stopped")
+        else:
+            saw = (f"Sage saw the last {sage_tools.RESULT_LINES} lines" if result.get("truncated")
+                   else "Sage saw all of it")
+            card.finish(code, elapsed, sage_saw=saw)
+        return result
+
+    def _append_card_line(self, card: ToolCard, line: str) -> None:
+        card.append_line(line)
+        self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
 
     @work(thread=True)
     def execute_command(self, command: str, out: ChatMessage) -> None:
@@ -289,6 +365,8 @@ class SagexApp(App):
         if self._busy:
             self.query_one("#command-activity", ActivityLine).set("Stopping", "")
         if self._sage_turn:
+            if self._sage_run is not None:
+                self._sage_run.cancel()      # a command Sage is running stops too
             self.run_worker(self._sage.cancel(), group="sage-cancel")   # Sage replies done{cancelled}
             return
         self.session.cancel()            # kills the process; the worker then finishes

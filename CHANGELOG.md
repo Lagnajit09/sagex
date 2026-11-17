@@ -10,7 +10,9 @@ All notable changes to sagex are recorded here. Versions follow [Semantic Versio
 - Ask about the command you just ran: the next question carries its output (tail only, with obvious secrets masked; never for `--reveal` or environment dumps).
 - `SAGEX_AI_URL` to point sagex at an Autobot running on its own port (defaults to `<api url>/api/ai`).
 
-Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. It can't run commands yet; it tells you what to run.
+- Sage looks things up for you: it can run read-only sagex commands (`list`, `show`, `render`, `trigger invoke`, `syntax`, `workspace show`) and read any command's help. Every call appears in the transcript as a card showing the exact command and its output; click a finished card to expand it. Esc stops it.
+
+Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. Commands that change things (run, create, update, delete, push…) aren't available to Sage yet; it gives you the command to run. Commands that sign in, take a secret or print one (`auth`, keys, trigger secrets, `--reveal`) are never available to Sage.
 
 ## [1.1.0] - 2026-11-01
 

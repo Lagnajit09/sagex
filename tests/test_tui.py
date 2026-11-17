@@ -2,9 +2,11 @@
 
 import asyncio
 
-from sagex import config
+from sagex import config, sage_tools
 from sagex.api import store
 from sagex.app import SagexApp
+from sagex.widgets.message import ChatMessage
+from sagex.widgets.tool_card import ToolCard
 
 
 def _isolate(monkeypatch, tmp_path, key):
@@ -29,12 +31,16 @@ class FakeSage:
     def __init__(self, frames):
         self.frames = frames
         self.turns = []
+        self.results = []
         self.closed = False
 
     async def turn(self, text, context=None):
         self.turns.append((text, context))
         for frame in self.frames:
             yield frame
+
+    async def send_tool_result(self, frame):
+        self.results.append(frame)
 
     async def cancel(self):
         pass
@@ -122,3 +128,92 @@ def test_last_command_becomes_context_once(monkeypatch, tmp_path):
         assert second_ctx is None
 
     asyncio.run(scenario())
+
+
+# --- Sage's tool calls (cards) ---------------------------------------------------
+
+def _tool_app(monkeypatch, tmp_path, frames):
+    _isolate(monkeypatch, tmp_path, "sgx_test")
+    monkeypatch.setattr(SagexApp, "_start_loaders", lambda self: None)
+    fake = FakeSage(frames)
+    app = SagexApp()
+    app._sage = fake
+    return app, fake
+
+
+def test_read_tool_runs_and_shows_a_card(monkeypatch, tmp_path):
+    ran = []
+
+    def fake_run(self, on_line):
+        ran.append(self.words)
+        for line in ("deploy.sh · python", "import os"):
+            self.lines.append(line)
+            on_line(line)
+        return 0
+
+    monkeypatch.setattr(sage_tools.CommandRun, "run", fake_run)
+    app, fake = _tool_app(monkeypatch, tmp_path, [
+        {"type": "token", "text": "Let me look."},
+        {"type": "tool_call", "id": "t1", "name": "sagex_read", "args": ["show", "script", "deploy.sh"]},
+        {"type": "token", "text": "It deploys the app."},
+        {"type": "done", "cancelled": False},
+    ])
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"what does deploy.sh do", "enter")
+            await _settle(pilot, app)
+            (card,) = list(app.query(ToolCard))
+            assert card.tool == "sagex_read" and card.command == "sagex show script deploy.sh"
+            assert card.lines == ["deploy.sh · python", "import os"] and card.state == "ok"
+            # Text before the tool, the card, then text after it — in that order.
+            log = app.query_one("#chat-log")
+            order = [type(w).__name__ for w in log.children
+                     if isinstance(w, (ToolCard, ChatMessage)) and not w.has_class("user")]
+            assert order == ["ChatMessage", "ToolCard", "ChatMessage"]
+            assert [m.body for m in app.query("ChatMessage.sage")] == ["Let me look.",
+                                                                       "It deploys the app."]
+
+    asyncio.run(scenario())
+    assert ran == [["show", "script", "deploy.sh"]]
+    (result,) = fake.results
+    assert result["id"] == "t1" and result["exit_code"] == 0
+    assert result["output"] == "deploy.sh · python\nimport os" and result["truncated"] is False
+
+
+def test_read_tool_refuses_a_change(monkeypatch, tmp_path):
+    monkeypatch.setattr(sage_tools.CommandRun, "run",
+                        lambda self, on_line: (_ for _ in ()).throw(AssertionError("ran")))
+    app, fake = _tool_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "sagex_read", "args": ["delete", "vault", "prod"]},
+        {"type": "done", "cancelled": False},
+    ])
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"delete prod", "enter")
+            await _settle(pilot, app)
+            (card,) = list(app.query(ToolCard))
+            assert card.state == "refused"
+
+    asyncio.run(scenario())
+    (result,) = fake.results
+    assert "changes things" in result["error"] and "exit_code" not in result
+
+
+def test_help_tool_returns_help_without_running_anything(monkeypatch, tmp_path):
+    app, fake = _tool_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "sagex_help", "args": ["run", "workflow"]},
+        {"type": "done", "cancelled": False},
+    ])
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"how do I run one", "enter")
+            await _settle(pilot, app)
+            (card,) = list(app.query(ToolCard))
+            assert card.tool == "sagex_help" and card.state == "ok"
+
+    asyncio.run(scenario())
+    (result,) = fake.results
+    assert "--param" in result["output"] and result["exit_code"] == 0

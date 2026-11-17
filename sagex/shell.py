@@ -51,7 +51,7 @@ _REPLS = {
 }
 
 
-def _clean(text: str) -> str:
+def clean_output(text: str) -> str:
     """Remove ANSI escape codes and stray carriage returns from output text."""
     return _ANSI_RE.sub("", text).replace("\r", "")
 
@@ -167,7 +167,7 @@ class ShellSession:
         self._proc = proc               # expose it so cancel() can reach it
         try:
             for line in proc.stdout:    # blocks until each line arrives, then loops
-                on_line(_clean(line.rstrip("\n")))   # strip control codes before display
+                on_line(clean_output(line.rstrip("\n")))   # strip control codes before display
             proc.wait()
             return proc.returncode
         finally:
