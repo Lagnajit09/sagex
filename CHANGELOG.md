@@ -12,7 +12,11 @@ All notable changes to sagex are recorded here. Versions follow [Semantic Versio
 
 - Sage looks things up for you: it can run read-only sagex commands (`list`, `show`, `render`, `trigger invoke`, `syntax`, `workspace show`) and read any command's help. Every call appears in the transcript as a card showing the exact command and its output; click a finished card to expand it. Esc stops it.
 
-Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. Commands that change things (run, create, update, delete, push…) aren't available to Sage yet; it gives you the command to run. Commands that sign in, take a secret or print one (`auth`, keys, trigger secrets, `--reveal`) are never available to Sage.
+- Sage can make changes for you (run, create, update, rename, delete, push, copy…), always with your say-so: each one appears as an approval card with a one-line description of what it will do and the exact command. Press `y` to run it once, `a` to let Sage run that command on that resource again without asking for the rest of the session, or `n` to decline. Deletes always ask and carry a warning. A workflow run draws its live graph inside the card.
+- `/permissions` lists what you've let Sage run without asking, and `/permissions revoke <n>` (or `revoke all`) takes it back. The line under the prompt shows how many are allowed.
+- A blank line under the prompt, so it doesn't sit against the footer.
+
+Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. Commands that sign in, take a secret or print one (`auth`, keys, trigger secrets, `--reveal`) are never available to Sage, and a run that needs a secret typed at a hidden prompt is handed back to you to run with `!`.
 
 ## [1.1.0] - 2026-11-01
 

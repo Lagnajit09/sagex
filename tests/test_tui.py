@@ -144,7 +144,7 @@ def _tool_app(monkeypatch, tmp_path, frames):
 def test_read_tool_runs_and_shows_a_card(monkeypatch, tmp_path):
     ran = []
 
-    def fake_run(self, on_line):
+    def fake_run(self, on_line, on_event=None):
         ran.append(self.words)
         for line in ("deploy.sh · python", "import os"):
             self.lines.append(line)
@@ -183,7 +183,7 @@ def test_read_tool_runs_and_shows_a_card(monkeypatch, tmp_path):
 
 def test_read_tool_refuses_a_change(monkeypatch, tmp_path):
     monkeypatch.setattr(sage_tools.CommandRun, "run",
-                        lambda self, on_line: (_ for _ in ()).throw(AssertionError("ran")))
+                        lambda self, on_line, on_event=None: (_ for _ in ()).throw(AssertionError("ran")))
     app, fake = _tool_app(monkeypatch, tmp_path, [
         {"type": "tool_call", "id": "t1", "name": "sagex_read", "args": ["delete", "vault", "prod"]},
         {"type": "done", "cancelled": False},
@@ -217,3 +217,187 @@ def test_help_tool_returns_help_without_running_anything(monkeypatch, tmp_path):
     asyncio.run(scenario())
     (result,) = fake.results
     assert "--param" in result["output"] and result["exit_code"] == 0
+
+
+# --- changes: approval cards (phase 1.4b) ---------------------------------------------
+
+from sagex.widgets import tool_card as tool_card_module  # noqa: E402
+
+
+async def _until(pilot, condition, timeout=5.0):
+    for _ in range(int(timeout / 0.05)):
+        await pilot.pause(0.05)
+        if condition():
+            return
+    raise AssertionError("condition never became true")
+
+
+def _asking(app):
+    return [c for c in app.query(ToolCard) if c.state == "asking"]
+
+
+def _change_app(monkeypatch, tmp_path, calls, ran):
+    """An app whose fake Sage makes `calls` (word lists) via sagex_change."""
+    monkeypatch.setattr(tool_card_module, "ARM_SECONDS", 0)
+
+    def fake_run(self, on_line, on_event=None):
+        ran.append(self.words)
+        if on_event is not None and self.words[:2] == ["run", "workflow"]:
+            on_event({"t": "start", "view": {"name": "deploy", "edges": [],
+                                             "nodes": [{"id": "n1", "label": "Build", "kind": "script"}]}})
+            on_event({"t": "node", "id": "n1", "status": "success"})
+            on_event({"t": "run", "status": "success"})
+        self.lines.append("✓ done")
+        on_line("✓ done")
+        return 0
+
+    monkeypatch.setattr(sage_tools.CommandRun, "run", fake_run)
+    frames = [{"type": "tool_call", "id": f"t{i}", "name": "sagex_change", "args": words,
+               "summary": f"Sage says: {' '.join(words)}"}
+              for i, words in enumerate(calls, 1)]
+    return _tool_app(monkeypatch, tmp_path, [*frames, {"type": "done", "cancelled": False}])
+
+
+def test_change_asks_then_runs_once_approved(monkeypatch, tmp_path):
+    ran = []
+    app, fake = _change_app(monkeypatch, tmp_path, [["run", "workflow", "deploy"]], ran)
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"run deploy", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert card.summary == "Sage says: run workflow deploy"
+            assert card.command == "sagex run workflow deploy" and card.warning is None
+            assert [k for k, _ in card._choices] == ["y", "a", "n"]
+            assert ran == []                                   # nothing runs before the answer
+            await pilot.press("y")
+            await _settle(pilot, app)
+            assert card.state == "ok" and card._note == "approved once"
+            assert card._view is not None and card._view.status == "success"   # live graph in the card
+
+    asyncio.run(scenario())
+    assert ran == [["run", "workflow", "deploy"]]
+    assert fake.results[0]["exit_code"] == 0
+
+
+def test_declined_change_never_runs(monkeypatch, tmp_path):
+    ran = []
+    app, fake = _change_app(monkeypatch, tmp_path, [["rename", "vault", "a", "b"]], ran)
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"rename a", "enter")
+            await _until(pilot, lambda: _asking(app))
+            await pilot.press("n")
+            await _settle(pilot, app)
+            (card,) = list(app.query(ToolCard))
+            assert card.state == "declined"
+
+    asyncio.run(scenario())
+    assert ran == []
+    assert "chose not to run" in fake.results[0]["error"]
+
+
+def test_delete_always_asks_and_runs_with_yes(monkeypatch, tmp_path):
+    ran = []
+    app, fake = _change_app(monkeypatch, tmp_path, [["delete", "vault", "staging"]], ran)
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"delete staging", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert [k for k, _ in card._choices] == ["y", "n"]   # no "allow for the session"
+            assert card.command == "sagex delete vault staging --yes"
+            assert "every server and credential" in card.warning
+            await pilot.press("a")                             # not a choice here: ignored
+            assert card.state == "asking"
+            await pilot.press("y")
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    assert ran == [["delete", "vault", "staging", "--yes"]]
+
+
+def test_allowed_for_the_session_until_revoked(monkeypatch, tmp_path):
+    ran = []
+    app, fake = _change_app(monkeypatch, tmp_path, [["run", "workflow", "deploy"],
+                                                    ["run", "workflow", "deploy", "-p", "v=2"]], ran)
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"run it twice", "enter")
+            await _until(pilot, lambda: _asking(app))
+            await pilot.press("a")
+            await _settle(pilot, app)
+            first, second = list(app.query(ToolCard))
+            assert second._note.startswith("allowed for this session")   # didn't ask again
+            assert "Sage may run 1 without asking" in str(app.query_one("#prompt-status").render())
+
+            await pilot.press(*"/permissions", "enter")
+            await pilot.pause()
+            listing = list(app.query("ChatMessage.cmd_output"))[-1].body
+            assert "1. sagex run workflow deploy" in listing
+            await pilot.press(*"/permissions revoke 1", "enter")
+            await pilot.pause()
+            assert len(app._allowances) == 0
+            assert "without asking" not in str(app.query_one("#prompt-status").render())
+
+    asyncio.run(scenario())
+    assert ran == [["run", "workflow", "deploy"], ["run", "workflow", "deploy", "-p", "v=2"]]
+
+
+def test_esc_on_an_approval_stops_without_running(monkeypatch, tmp_path):
+    ran = []
+    app, fake = _change_app(monkeypatch, tmp_path, [["rename", "vault", "a", "b"]], ran)
+    cancelled = []
+
+    async def cancel():
+        cancelled.append(True)
+
+    fake.cancel = cancel
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"rename a", "enter")
+            await _until(pilot, lambda: _asking(app))
+            await pilot.press("escape")
+            await _settle(pilot, app)
+            (card,) = list(app.query(ToolCard))
+            assert card.state == "declined" and card._note == "stopped"
+
+    asyncio.run(scenario())
+    assert ran == [] and cancelled == [True]
+    assert "stopped this before it ran" in fake.results[0]["error"]
+
+
+def test_keys_typed_ahead_dont_answer_a_new_card(monkeypatch, tmp_path):
+    ran = []
+    app, fake = _change_app(monkeypatch, tmp_path, [["rename", "vault", "a", "b"]], ran)
+    monkeypatch.setattr(tool_card_module, "ARM_SECONDS", 30)
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"rename a", "enter")
+            await _until(pilot, lambda: _asking(app))
+            await pilot.press("y")                             # too soon after it appeared
+            assert _asking(app)
+            app.action_stop_command()
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    assert ran == []
+
+
+def test_unknown_slash_command(monkeypatch, tmp_path):
+    app, fake = _tool_app(monkeypatch, tmp_path, [])
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"/nope", "enter")
+            await pilot.pause()
+            assert "Unknown command /nope" in list(app.query("ChatMessage.notice"))[-1].body
+            assert fake.turns == []                            # never sent to Sage
+
+    asyncio.run(scenario())

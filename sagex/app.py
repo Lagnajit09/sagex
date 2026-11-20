@@ -26,6 +26,14 @@ from sagex.widgets.prompt_input import PromptInput
 from sagex.widgets.tool_card import ToolCard
 
 
+def _one_line(value, limit: int = 200) -> str:
+    """Sage's summary of a change, as one plain bounded line (it's model text)."""
+    if not isinstance(value, str):
+        return ""
+    text = " ".join("".join(c if c.isprintable() else " " for c in value).split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 class SagexApp(App):
     """The whole application. Everything hangs off this one class."""
 
@@ -50,6 +58,8 @@ class SagexApp(App):
         self._sage = SageSession(hello=sage_tools.hello_frame)   # connected on first use
         self._sage_turn = False                           # is the busy thing a Sage reply?
         self._sage_run: sage_tools.CommandRun | None = None   # a command Sage is running
+        self._asking: ToolCard | None = None              # a change waiting for approval
+        self._allowances = sage_tools.Allowances()        # changes allowed for this session
         self._last_command: dict | None = None            # context for the next Sage question
         self._selected_label: str | None = None                  # the highlighted resource, if any
         self._run_graph: RunGraph | None = None           # live graph of the running command
@@ -110,6 +120,9 @@ class SagexApp(App):
         text.append("Sage", style=f"bold {ACCENT}")
         text.append(", your Autosage assistant — ask why your last command failed\n",
                     style="bright_black")
+        text.append("Sage asks before it changes anything · ", style="bright_black")
+        text.append("/permissions", style="bold")
+        text.append(" to review what you've allowed\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
                     style="bright_black")
         return text
@@ -168,6 +181,10 @@ class SagexApp(App):
             return
         self.query_one("#chat-input", PromptInput).add_to_history(text)   # for ↑/↓ recall
 
+        if text.startswith("/"):         # "/" prefix -> an app command (/permissions)
+            self.add_message(text, "user")
+            self._app_command(text[1:].split())
+            return
         if text.startswith("!"):         # "!" prefix -> run as a shell command
             command = text[1:].strip()
             if not command:
@@ -191,6 +208,40 @@ class SagexApp(App):
             self._sage_turn = True
             self._set_busy(True, "Thinking")
             self.ask_sage(text, context)
+
+    def _app_command(self, words: list[str]) -> None:
+        """`/permissions` — see and revoke the changes Sage may make without asking."""
+        name, args = (words[0].lower(), words[1:]) if words else ("", [])
+        if name != "permissions":
+            self.add_message(f"Unknown command /{name}. Available: /permissions", "notice")
+            return
+        allowances = self._allowances
+        usage = "Usage: /permissions · /permissions revoke <number> · /permissions revoke all"
+        if not args:
+            if not len(allowances):
+                self.add_message("Sage asks before every change. Press a on an approval card to "
+                                 "let it run that command again without asking, this session.",
+                                 "cmd_output")
+                return
+            lines = ["Sage may run these without asking, until you quit sagex:"]
+            lines += [f"  {i}. {sage_tools.Allowances.label(key)}  (any options)"
+                      for i, key in enumerate(allowances.items(), 1)]
+            lines += ["Deletes always ask.", "Revoke: /permissions revoke <number> · /permissions revoke all"]
+            self.add_message("\n".join(lines), "cmd_output")
+        elif len(args) == 2 and args[0].lower() == "revoke":
+            if args[1].lower() == "all":
+                count = allowances.clear()
+                self.add_message(f"Revoked {count} — Sage asks before every change again.", "notice")
+            else:
+                key = allowances.revoke(int(args[1])) if args[1].isdigit() else None
+                if key is None:
+                    self.add_message(f"No allowance {args[1]!r}. See /permissions.", "notice")
+                else:
+                    self.add_message(f"Revoked: {sage_tools.Allowances.label(key)} — Sage asks "
+                                     "before running it again.", "notice")
+        else:
+            self.add_message(usage, "notice")
+        self._refresh_prompt()
 
     @work(group="sage")
     async def ask_sage(self, text: str, context: dict | None) -> None:
@@ -251,25 +302,42 @@ class SagexApp(App):
             card.finish(0, None, sage_saw="Sage read it")
             return {"type": "tool_result", "id": call_id, "exit_code": 0, "output": text}
 
-        card = ToolCard(name, "sagex " + shlex.join(words))
-        self._mount_entry(card)
-        if name != "sagex_read":
+        if name not in ("sagex_read", "sagex_change"):
+            card = ToolCard(name, "sagex " + shlex.join(words))
+            self._mount_entry(card)
             return refused(card, f"{name} isn't available in this version of sagex.")
+
         check = sage_tools.check(words)
+        change = check.error is None and not check.read_only
+        summary = warning = None
+        if change and name == "sagex_change":
+            words = sage_tools.approved_words(words, check)   # the card shows exactly what runs
+            summary = _one_line(frame.get("summary")) or sage_tools.describe(check)
+            warning = sage_tools.warning(check)
+        card = ToolCard(name, "sagex " + shlex.join(words), summary=summary, warning=warning)
+        self._mount_entry(card)
         if check.error:
             return refused(card, check.error)
-        if not check.read_only:
+        if change and name == "sagex_read":
             return refused(card, f"`sagex {' '.join(check.path)}` changes things or runs long, so "
-                                 "sagex_read can't run it. Give the user the `!sagex …` command.")
+                                 "sagex_read can't run it. Use sagex_change.")
+        if change:
+            declined = await self._approve(card, check)
+            if declined:
+                return {"type": "tool_result", "id": call_id, "error": declined}
 
         width = self.query_one("#chat-log", VerticalScroll).size.width - 6
-        run = sage_tools.CommandRun(words, cwd=self.session.cwd, width=width)
+        run = sage_tools.CommandRun(
+            words, cwd=self.session.cwd, width=width,
+            timeout=sage_tools.CHANGE_TIMEOUT if change else sage_tools.READ_TIMEOUT)
         self._sage_run = run
         self.query_one("#command-activity", ActivityLine).set(f"Running sagex {' '.join(check.path)}")
         started = time.monotonic()
         try:
             code = await asyncio.to_thread(
-                run.run, lambda line: self.call_from_thread(self._append_card_line, card, line))
+                run.run,
+                lambda line: self.call_from_thread(self._append_card_line, card, line),
+                (lambda event: self.call_from_thread(card.run_event, event)) if change else None)
         except OSError as exc:
             return refused(card, f"Couldn't start sagex: {exc}")
         finally:
@@ -286,6 +354,49 @@ class SagexApp(App):
                    else "Sage saw all of it")
             card.finish(code, elapsed, sage_saw=saw)
         return result
+
+    async def _approve(self, card: ToolCard, check: sage_tools.Check) -> str | None:
+        """Ask the user to approve a change on its card. None when approved,
+        else the reason it didn't run (sent back to Sage)."""
+        allowed_note = "allowed for this session · /permissions to change"
+        if self._allowances.allows(check):
+            card.approved(allowed_note)
+            return None
+        key = sage_tools.Allowances.key(check)
+        choices = [("y", "delete it" if check.always_ask else "run it")]
+        if self._allowances.can_allow(check):
+            choices.append(("a", f"allow `{sage_tools.Allowances.label(key)}` this session"))
+        choices.append(("n", "don't run"))
+
+        activity = self.query_one("#command-activity", ActivityLine)
+        activity.set("Waiting for your approval", " · ".join(k for k, _ in choices) + " · esc to stop")
+        self._asking = card
+        try:
+            answer = await asyncio.wait_for(card.ask(choices), sage_tools.APPROVAL_TIMEOUT)
+        except asyncio.TimeoutError:
+            answer = "timeout"
+        finally:
+            self._asking = None
+            card.withdraw()                  # no-op once answered
+            activity.set("Thinking", "esc to stop")
+            self.query_one("#chat-log", VerticalScroll).focus()
+
+        if answer == "y":
+            card.approved("approved once")
+            return None
+        if answer == "a":
+            self._allowances.allow(check)
+            card.approved(allowed_note)
+            self._refresh_prompt()
+            return None
+        if answer == "timeout":
+            card.decline(f"no answer in {int(sage_tools.APPROVAL_TIMEOUT // 60)} minutes")
+            return "The user didn't answer the approval in time, so it didn't run."
+        if answer is None:
+            card.decline("stopped")
+            return "The user stopped this before it ran."
+        card.decline("you chose not to run it")
+        return "The user chose not to run this. Don't retry it; ask what they'd like instead."
 
     def _append_card_line(self, card: ToolCard, line: str) -> None:
         card.append_line(line)
@@ -365,6 +476,8 @@ class SagexApp(App):
         if self._busy:
             self.query_one("#command-activity", ActivityLine).set("Stopping", "")
         if self._sage_turn:
+            if self._asking is not None:
+                self._asking.withdraw()      # a pending approval ends as "not run"
             if self._sage_run is not None:
                 self._sage_run.cancel()      # a command Sage is running stops too
             self.run_worker(self._sage.cancel(), group="sage-cancel")   # Sage replies done{cancelled}
@@ -400,6 +513,9 @@ class SagexApp(App):
         if self._selected_label:
             status.append("  ·  context: ", style="bright_black")
             status.append(self._selected_label)
+        if len(self._allowances):
+            status.append(f"  ·  Sage may run {len(self._allowances)} without asking (/permissions)",
+                          style="yellow")
         self.query_one("#prompt-status", Static).update(status)
 
     def _start_loaders(self) -> None:
