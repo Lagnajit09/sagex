@@ -31,7 +31,8 @@ def test_index_leaves_out_secret_commands_and_options(hidden):
 def test_hello_offers_the_index_and_tools():
     hello = t.hello_frame()
     assert hello["index"] == t.command_index()
-    assert hello["tools"] == ["sagex_change", "sagex_help", "sagex_read"]
+    assert hello["tools"] == ["delete_file", "edit_file", "read_file", "run_shell", "sagex_change",
+                              "sagex_help", "sagex_read", "write_file"]
 
 
 # --- check ---------------------------------------------------------------------------
@@ -188,8 +189,13 @@ def test_allowances_are_per_command_and_resource():
     assert allow.allows(t.check(["run", "workflow", "deploy", "-p", "v=2"]))   # options may vary
     assert not allow.allows(t.check(["run", "workflow", "other"]))
     assert not allow.allows(t.check(["delete", "workflow", "deploy"]))
-    assert allow.items() == [("run", "workflow", "deploy")]
-    assert t.Allowances.label(allow.items()[0]) == "sagex run workflow deploy"
+    assert allow.items() == ["`sagex run workflow deploy`"]
+    # File and shell grants live alongside, keyed by kind.
+    allow.allow(t.Grant(("shell", "powershell", "python --version"), "`python --version` in powershell"))
+    assert allow.allows(t.Grant(("shell", "powershell", "python --version"), "x"))
+    assert not allow.allows(t.Grant(("shell", "powershell", "python -V"), "x"))
+    allow.allow(t.Grant(("delete", "a.sh"), "a.sh", allowable=False))
+    assert len(allow) == 2
 
 
 def test_deletes_and_reads_can_never_be_allowed():
@@ -204,7 +210,7 @@ def test_allowances_can_be_revoked():
     allow = t.Allowances()
     for name in ("a", "b", "c"):
         allow.allow(t.check(["rename", "vault", name, f"{name}2"]))
-    assert allow.revoke(2) == ("rename", "vault", "b")
+    assert allow.revoke(2) == "`sagex rename vault b`"
     assert allow.revoke(9) is None and allow.revoke(0) is None
     assert not allow.allows(t.check(["rename", "vault", "b", "x"]))
     assert allow.clear() == 2 and len(allow) == 0

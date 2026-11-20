@@ -723,13 +723,16 @@ def show_workflow_cmd(
 @render_app.command("workflow")
 def render_workflow_cmd(
     ref: str = typer.Argument(None, help="Workflow name or id (omit when using --file)."),
-    file: str = typer.Option(None, "--file", "-f", help="Render a local file: a path, or a name under <workspace>/workflows/."),
+    file: str = typer.Option(None, "--file", "-f", help="Render a local file: a path in the workspace, or a name under <workspace>/workflows/."),
 ) -> None:
     """Render a workflow's flow as boxed nodes + edges. Works on a local file too (--file)."""
     if file:
         workspace = Path(config.workspace_dir())
         try:
             path = pusher.resolve_workflow_file(workspace, file)
+        except config.OutsideWorkspace as exc:
+            typer.echo(f"✗ {exc}")
+            raise typer.Exit(code=1)
         except pusher.WorkflowFileNotFound as exc:
             typer.echo(f"No workflow file for '{exc.ref}'. Looked at:")
             for p in exc.looked:
@@ -1053,10 +1056,19 @@ def copy_key_cmd(
     raise typer.Exit(code=1)
 
 
+def _output_path(output: str, workspace: Path) -> Path:
+    """An --output path: relative ones go under the workspace, not the current folder."""
+    try:
+        return config.workspace_path(output, workspace)
+    except config.OutsideWorkspace as exc:
+        typer.echo(f"✗ {exc}")
+        raise typer.Exit(code=1)
+
+
 @new_app.command("workflow")
 def new_workflow_cmd(
     name: str = typer.Argument(..., help="Workflow display name."),
-    output: str = typer.Option(None, "--output", "-o", help="Output path (default: <workspace>/workflows/<name>.json)."),
+    output: str = typer.Option(None, "--output", "-o", help="Output path, relative to the workspace (default: workflows/<name>.json)."),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite if the file already exists."),
 ) -> None:
     """Create a template workflow JSON file in your workspace, ready to edit and push."""
@@ -1064,7 +1076,7 @@ def new_workflow_cmd(
 
     workspace = Path(config.workspace_dir())
     if output:
-        dest = Path(output)
+        dest = _output_path(output, workspace)
     else:
         stem = safe_name(name, "workflow")
         dest = workspace / "workflows" / f"{stem}.json"
@@ -1089,7 +1101,7 @@ def new_workflow_cmd(
 def new_script_cmd(
     name: str = typer.Argument(..., help="Script name (letters, numbers, _ and - only)."),
     language: str = typer.Option(None, "--language", "--lang", help="Language, e.g. shell, python, powershell (inferred from --output's extension if omitted)."),
-    output: str = typer.Option(None, "--output", "-o", help="Output path (default: <workspace>/scripts/<name>.<ext>)."),
+    output: str = typer.Option(None, "--output", "-o", help="Output path, relative to the workspace (default: scripts/<name>.<ext>)."),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite if the file already exists."),
 ) -> None:
     """Create a starter script file with a header explaining how params & secrets reach it."""
@@ -1106,7 +1118,7 @@ def new_script_cmd(
         typer.echo(f"✗ {exc}")
         raise typer.Exit(code=1)
 
-    dest = Path(output) if output else workspace / "scripts" / filename
+    dest = _output_path(output, workspace) if output else workspace / "scripts" / filename
     if dest.exists() and not force:
         typer.echo(f"✗ {dest} already exists. Pass --force to overwrite, or choose a different name.")
         raise typer.Exit(code=1)
@@ -1950,7 +1962,7 @@ def rename_key_cmd(
 
 @push_app.command("workflow")
 def push_workflow_cmd(
-    ref: str = typer.Argument(..., help="Workflow file path, or a name under <workspace>/workflows/."),
+    ref: str = typer.Argument(..., help="Workflow file path in the workspace, or a name under <workspace>/workflows/."),
     new: bool = typer.Option(False, "--new", help="Force-create a new workflow even if the file has an id."),
     name: str = typer.Option(None, "--name", help="Override the workflow name (useful with --new)."),
     yes: bool = typer.Option(False, "--yes", help="Skip the update confirmation prompt."),
@@ -1961,11 +1973,15 @@ def push_workflow_cmd(
 
     try:
         path = pusher.resolve_workflow_file(workspace, ref)
+    except config.OutsideWorkspace as exc:
+        typer.echo(f"✗ {exc}")
+        raise typer.Exit(code=1)
     except pusher.WorkflowFileNotFound as exc:
         typer.echo(f"No workflow file for '{exc.ref}'. Looked at:")
         for p in exc.looked:
             typer.echo(f"  {p}")
         raise typer.Exit(code=1)
+    typer.echo(f"Local file: {path.resolve()}")
 
     try:
         doc = pusher.load_doc(path)
@@ -2027,7 +2043,7 @@ def push_workflow_cmd(
 
 @push_app.command("script")
 def push_script_cmd(
-    ref: str = typer.Argument(..., help="Script file path, or a name under <workspace>/scripts/."),
+    ref: str = typer.Argument(..., help="Script file path in the workspace, or a name under <workspace>/scripts/."),
     name: str = typer.Option(None, "--name", help="Override the script name (letters, numbers, _ and - only)."),
     language: str = typer.Option(None, "--language", "--lang", help="Override the language (else inferred from the file extension)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the update confirmation prompt."),
@@ -2043,11 +2059,14 @@ def push_script_cmd(
 
     try:
         path = pusher.resolve_script_file(workspace, ref)
+    except config.OutsideWorkspace as exc:
+        typer.echo(f"✗ {exc}")
+        raise typer.Exit(code=1)
     except pusher.ScriptFileNotFound as exc:
         if exc.matches:
-            typer.echo(f"'{exc.ref}' matches more than one file — pass the full name:")
+            typer.echo(f"'{exc.ref}' matches more than one file — pass the path of the one you mean:")
             for p in exc.matches:
-                typer.echo(f"  {p.name}")
+                typer.echo(f"  {p}")
         else:
             typer.echo(f"No script file for '{exc.ref}'. Looked at:")
             for p in exc.looked:
@@ -2059,6 +2078,9 @@ def push_script_cmd(
     except ValueError as exc:
         typer.echo(f"✗ {exc}")
         raise typer.Exit(code=1)
+    # Always say which file: a name can match a stray copy somewhere else.
+    lines = spec["content"].count("\n") + (not spec["content"].endswith("\n"))
+    typer.echo(f"Local file: {path.resolve()} ({lines} lines)")
 
     # Check-then-confirm: is there already a script of ours with this filename?
     try:
@@ -2080,7 +2102,8 @@ def push_script_cmd(
             render.note(f"  (couldn't fetch the current version to diff: {exc.message})")
 
         if server_code is not None and not render.script_diff(spec["server_name"], server_code, spec["content"]):
-            typer.echo("Local file matches the server copy — nothing to update.")
+            typer.echo(f"The local file is the same as the server's v{existing.get('version')} — "
+                       "nothing to update.")
             return
 
         if not yes and not typer.confirm("  Update it? This overwrites the code and bumps the version."):
@@ -2249,7 +2272,8 @@ def _collect_inputs(specs: list[dict], raw: list[str]) -> dict:
             typer.echo(f"✗ '{name}' is a secret and can only be typed at a hidden prompt — run this in a terminal.")
             raise typer.Exit(code=1)
         else:
-            typer.echo(f"✗ No value for '{name}'. Pass --param {name}=VALUE.")
+            typer.echo(f"✗ No value for '{name}': the script uses {{{{{name}}}}} and it has no default. "
+                       f"Pass --param {name}=VALUE.")
             raise typer.Exit(code=1)
     return inputs
 

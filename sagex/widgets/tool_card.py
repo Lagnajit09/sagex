@@ -25,6 +25,10 @@ A change (`sagex_change`) first asks:
 Sage's summary is its own words; the command line below it is what actually
 runs, and a delete's warning comes from sagex, not from Sage. A workflow run
 draws its live graph inside the card, above the output.
+
+File and shell cards work the same way: `write_file` previews the new file
+(or a coloured diff) above the choices, `read_file` shows what Sage would
+receive, and `run_shell` shows the shell it runs in (`powershell ❯ …`).
 """
 
 from __future__ import annotations
@@ -63,12 +67,15 @@ class ToolCard(Static):
     """
 
     def __init__(self, tool: str, command: str, *, folded_lines: int = FOLDED_LINES,
-                 summary: str | None = None, warning: str | None = None) -> None:
+                 summary: str | None = None, warning: str | None = None,
+                 glyph: str = "$ ") -> None:
         super().__init__()
         self.tool = tool
         self.command = command
         self.summary = summary
         self.warning = warning
+        self.glyph = glyph               # "$ " for commands, "▸ " for file operations
+        self.diff = False                # lines are a unified diff (colour + and -)
         self.lines: list[str] = []
         self._dropped = 0
         self._folded_lines = folded_lines
@@ -184,8 +191,7 @@ class ToolCard(Static):
     def on_click(self) -> None:
         if self._state == "asking":
             self.focus()                 # e.g. after clicking elsewhere: keys answer it again
-            return
-        if self._state != "running" and len(self.lines) > self._folded_lines:
+        if self._state != "running" and len(self.lines) > self._limit():
             self._expanded = not self._expanded
             self._rebuild()
 
@@ -196,21 +202,31 @@ class ToolCard(Static):
 
     # --- rendering ----------------------------------------------------------------
 
+    def _limit(self) -> int:
+        return LIVE_LINES if self._state in ("running", "asking") else self._folded_lines
+
     def _visible(self) -> tuple[list[str], int, bool]:
         """(lines to show, how many are hidden, whether the hidden ones come first).
 
         Live and failed output shows its end (where errors are); a successful
-        command folds to its start (headers, the first rows).
+        command, and a preview waiting for approval (a file to write), fold to
+        their start.
         """
         if self._expanded and self._state != "running":
             return self.lines, self._dropped, True
-        limit = LIVE_LINES if self._state == "running" else self._folded_lines
-        from_end = self._state != "ok"
+        limit = self._limit()
+        from_end = self._state not in ("ok", "asking")
         if not limit:
             shown = []
         else:
             shown = self.lines[-limit:] if from_end else self.lines[:limit]
         return shown, len(self.lines) - len(shown) + self._dropped, from_end
+
+    def _line_text(self, line: str) -> Text:
+        """Output as plain text; a diff preview (an overwrite) gets its colours."""
+        if self.diff and line and line[0] in "+-@":
+            return Text(line, style={"+": "green", "-": "bold red", "@": "cyan"}[line[0]])
+        return Text(line)
 
     def _choices_text(self) -> Text:
         """One choice per line, so a long one never splits a key from its label."""
@@ -222,20 +238,18 @@ class ToolCard(Static):
         parts: list = []
         if self.summary:
             parts.append(Text(self.summary, style="bold"))
-        parts.append(Text.assemble(("$ ", "bright_black"),
+        parts.append(Text.assemble((self.glyph, "bright_black"),
                                    (self.command, "" if self.summary else "bold")))
         if self.warning:
             parts.append(Text(f"⚠ {self.warning}", style="bold red"))
         if self._note:
             parts.append(Text(self._note, style="yellow" if self._state == "refused" else "bright_black"))
-        if self._state == "asking":
-            parts += [Rule(style="bright_black"), self._choices_text()]
         if self._view is not None:
             parts += [Rule(style="bright_black"), self._view.graph()]
         shown, hidden, hidden_first = self._visible()
         if shown or hidden:
             parts.append(Rule(style="bright_black"))
-        foldable = self._state not in ("running", "asking") and len(self.lines) > self._folded_lines
+        foldable = self._state != "running" and len(self.lines) > self._limit()
         if self._expanded and foldable:
             label = Text("▾ click to collapse", style="bright_black")
         elif foldable:
@@ -247,9 +261,11 @@ class ToolCard(Static):
             label = None
         if label is not None and hidden_first:
             parts.append(label)
-        parts.extend(Text(line) for line in shown)
+        parts.extend(self._line_text(line) for line in shown)
         if label is not None and not hidden_first:
             parts.append(label)
+        if self._state == "asking":      # the choices last, right where the eye ends up
+            parts += [Rule(style="bright_black"), self._choices_text()]
         self.update(Panel(
             Group(*parts),
             title=Text(self.tool, style=f"bold {color}"), title_align="left",

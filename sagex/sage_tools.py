@@ -14,7 +14,8 @@ Sage (the model) asks for sagex commands as word lists — ["show", "script",
   connection. It's generated from the installed sagex, so it always matches.
 
 Commands that need or print secrets are never available to Sage (see NEVER);
-the user runs those with `!`.
+the user runs those with `!`. Sage's file and shell tools live in local_tools;
+they share `Allowances` and `CommandRun` with the sagex tools.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from dataclasses import dataclass
 
 import typer
 
+from sagex import config
 from sagex.runview import parse_event_line
 from sagex.sage import scrub
 from sagex.shell import clean_output
@@ -205,50 +207,74 @@ def approved_words(words: list[str], check: Check) -> list[str]:
     return list(words)
 
 
-class Allowances:
-    """Commands the user let Sage run without asking, for this app session.
+@dataclass(frozen=True)
+class Grant:
+    """What an "allow for this session" answer would cover.
 
-    Keyed by command and the resource it acts on — `run workflow deploy` — so
-    allowing one workflow doesn't allow others; its options may vary. Deletes
-    are never allowed this way. Held in memory only: a new session asks again.
+    `key` identifies it (the kind first: "sagex", "read", "write", "shell"),
+    `label` is how the card and /permissions name it, `allowable` False means
+    it must ask every time (deletes, destructive shell commands).
+    """
+
+    key: tuple[str, ...]
+    label: str
+    allowable: bool = True
+
+
+def grant_for(check: Check) -> Grant:
+    """A sagex change's grant: the command and the resource it acts on —
+    `run workflow deploy` — so allowing one workflow doesn't allow others;
+    its options may vary."""
+    key = (*check.path, check.ref) if check.ref else check.path
+    return Grant(("sagex", *key), f"`sagex {shlex.join(key)}`",
+                 allowable=not check.always_ask and not check.read_only and check.error is None)
+
+
+class Allowances:
+    """What the user let Sage do without asking, for this app session.
+
+    Holds grants (see `Grant`): sagex changes per command + resource, file
+    reads per folder, writes per file, shell commands per exact command line.
+    Held in memory only: a new session asks again.
     """
 
     def __init__(self) -> None:
-        self._keys: list[tuple[str, ...]] = []
+        self._grants: dict[tuple[str, ...], str] = {}
 
     @staticmethod
-    def key(check: Check) -> tuple[str, ...]:
-        return (*check.path, check.ref) if check.ref else check.path
+    def _grant(item: Check | Grant) -> Grant:
+        return grant_for(item) if isinstance(item, Check) else item
 
-    @staticmethod
-    def label(key: tuple[str, ...]) -> str:
-        return "sagex " + shlex.join(key)
+    def can_allow(self, item: Check | Grant) -> bool:
+        return self._grant(item).allowable
 
-    def can_allow(self, check: Check) -> bool:
-        return not check.always_ask and not check.read_only and check.error is None
+    def allows(self, item: Check | Grant) -> bool:
+        grant = self._grant(item)
+        return grant.allowable and grant.key in self._grants
 
-    def allows(self, check: Check) -> bool:
-        return self.can_allow(check) and self.key(check) in self._keys
+    def allow(self, item: Check | Grant) -> None:
+        grant = self._grant(item)
+        if grant.allowable:
+            self._grants.setdefault(grant.key, grant.label)
 
-    def allow(self, check: Check) -> None:
-        if self.can_allow(check) and self.key(check) not in self._keys:
-            self._keys.append(self.key(check))
+    def items(self) -> list[str]:
+        """The labels, in the order they were allowed (as /permissions numbers them)."""
+        return list(self._grants.values())
 
-    def items(self) -> list[tuple[str, ...]]:
-        return list(self._keys)
-
-    def revoke(self, index: int) -> tuple[str, ...] | None:
-        """Revoke the n-th allowance (1-based, as /permissions lists them)."""
-        if 1 <= index <= len(self._keys):
-            return self._keys.pop(index - 1)
+    def revoke(self, index: int) -> str | None:
+        """Revoke the n-th allowance (1-based); its label, or None."""
+        keys = list(self._grants)
+        if 1 <= index <= len(keys):
+            return self._grants.pop(keys[index - 1])
         return None
 
     def clear(self) -> int:
-        count, self._keys = len(self._keys), []
+        count = len(self._grants)
+        self._grants.clear()
         return count
 
     def __len__(self) -> int:
-        return len(self._keys)
+        return len(self._grants)
 
 
 # --- the index and help -------------------------------------------------------
@@ -328,7 +354,8 @@ def command_index() -> str:
     ])
 
 
-TOOLS = ("sagex_change", "sagex_help", "sagex_read")
+TOOLS = ("delete_file", "edit_file", "read_file", "run_shell", "sagex_change", "sagex_help",
+         "sagex_read", "write_file")
 
 
 def hello_frame() -> dict:
@@ -387,10 +414,16 @@ def result_tail(lines: list[str]) -> tuple[str, bool]:
 
 
 class CommandRun:
-    """One sagex command run for Sage, cancellable from another thread."""
+    """One command run for Sage, cancellable from another thread.
+
+    A sagex command by default (`words` after `python -m sagex`); with `argv`
+    and `env`, any program — Sage's shell tool passes the user's shell
+    invocation and an environment without the SageCode key.
+    """
 
     def __init__(self, words: list[str], *, cwd: str | None = None, width: int = 100,
-                 timeout: float = READ_TIMEOUT) -> None:
+                 timeout: float = READ_TIMEOUT, argv: list[str] | None = None,
+                 env: dict[str, str] | None = None) -> None:
         self.words = list(words)
         self.cwd = cwd
         self.width = max(60, min(width, 200))
@@ -399,6 +432,8 @@ class CommandRun:
         self.timed_out = False
         # The installed sagex, run by the same Python as this app.
         self.program = [sys.executable, "-m", "sagex"]
+        self.argv = argv
+        self.env = env
         self._proc: subprocess.Popen | None = None
         self._cancelled = threading.Event()
 
@@ -413,14 +448,16 @@ class CommandRun:
             return -1
         group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
                  else {"start_new_session": True})
-        env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": str(self.width),
-               "PYTHONIOENCODING": "utf-8"}
+        env = {**(os.environ if self.env is None else self.env), "NO_COLOR": "1", "TERM": "dumb",
+               "COLUMNS": str(self.width), "PYTHONIOENCODING": "utf-8"}
         if on_event is not None:
             env["SAGEX_EVENTS"] = "1"
         else:
             env.pop("SAGEX_EVENTS", None)        # plain output, no live-graph event lines
+        if self.argv is None:                    # a sagex command: its paths stay in the workspace
+            env[config.WORKSPACE_ONLY_ENV] = "1"
         self._proc = subprocess.Popen(
-            [*self.program, *self.words],
+            self.argv or [*self.program, *self.words],
             cwd=self.cwd, stdin=subprocess.DEVNULL,       # a prompt reads EOF instead of hanging
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1, env=env, **group,
@@ -470,7 +507,7 @@ def result_frame(call_id: str, code: int, run: CommandRun, elapsed: float) -> di
     if run.timed_out:
         return {"type": "tool_result", "id": call_id,
                 "error": f"The command was stopped after {int(run.timeout)}s without finishing. "
-                         "Anything it started on the server (e.g. a run) may still be going."}
+                         "Anything it started (e.g. a run on the server) may still be going."}
     output, cut = result_tail(run.lines)
     return {"type": "tool_result", "id": call_id, "exit_code": code, "output": output,
             "truncated": cut, "seconds": round(elapsed, 1)}

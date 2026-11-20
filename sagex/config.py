@@ -95,5 +95,45 @@ def resolve_workspace(path: str) -> str:
 
 
 def workspace_dir() -> str:
-    """The effective workspace folder: the saved one, else the current directory."""
+    """The effective workspace folder: the saved one, else the current directory.
+
+    Every relative path a command takes resolves here (workspace_path), wherever
+    sagex was started.
+    """
     return load().get("workspace") or os.getcwd()
+
+
+# Set (to "1") on the sagex commands Sage runs: every path they take must stay in
+# the workspace, so a model can't push or render a file from anywhere on disk.
+WORKSPACE_ONLY_ENV = "SAGEX_WORKSPACE_ONLY"
+
+
+class OutsideWorkspace(ValueError):
+    """A path a command was given isn't allowed (outside the workspace, for Sage)."""
+
+
+def workspace_path(ref: str, workspace: str | os.PathLike | None = None) -> Path:
+    """Where a path the user gave points: relative paths are under the workspace
+    (never the current folder), absolute ones and ~ are used as given.
+
+    Under SAGEX_WORKSPACE_ONLY=1 (Sage's runs), anything outside the workspace,
+    or named like a secret file, raises OutsideWorkspace.
+    """
+    ws = Path(workspace if workspace is not None else workspace_dir())
+    path = Path(os.path.expanduser(str(ref)))
+    if not path.is_absolute():
+        path = ws / path
+    if os.environ.get(WORKSPACE_ONLY_ENV) == "1":
+        real = os.path.normcase(os.path.realpath(path))
+        root = os.path.normcase(os.path.realpath(ws))
+        try:
+            inside = os.path.commonpath([real, root]) == root
+        except ValueError:                    # another drive on Windows
+            inside = False
+        if not inside:
+            raise OutsideWorkspace(f"{ref} is outside the workspace ({ws}); only files in the "
+                                   "workspace can be used here.")
+        from sagex.local_tools import is_secret_name
+        if is_secret_name(path.name):
+            raise OutsideWorkspace(f"{path.name} usually holds secrets, so it can't be used here.")
+    return path

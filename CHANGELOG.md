@@ -15,6 +15,21 @@ All notable changes to sagex are recorded here. Versions follow [Semantic Versio
 - Sage can make changes for you (run, create, update, rename, delete, push, copy…), always with your say-so: each one appears as an approval card with a one-line description of what it will do and the exact command. Press `y` to run it once, `a` to let Sage run that command on that resource again without asking for the rest of the session, or `n` to decline. Deletes always ask and carry a warning. A workflow run draws its live graph inside the card.
 - `/permissions` lists what you've let Sage run without asking, and `/permissions revoke <n>` (or `revoke all`) takes it back. The line under the prompt shows how many are allowed.
 - A blank line under the prompt, so it doesn't sit against the footer.
+- Sage can work with files in your workspace: read them, write them (it shows the new file, or a diff when it replaces one, before you approve) and delete them (always asks). Only files in the workspace or the terminal's current folder, and never ones that usually hold secrets (`.env`, keys, certificates, `.git`, `.ssh`…). "Create a script that…" now ends with the script written and pushed.
+- Sage can run shell commands on your machine (checking a version, installing a tool) in your current shell, after you approve each one. It can't type into prompts, see your SageCode key or print environment variables, and commands that delete things, need admin rights or download-and-run code always ask, with a warning.
+- Sage edits files in place: it changes just the lines that need changing (shown as a diff) instead of rewriting the whole file. Allowing Sage to write a file for the session covers its edits too.
+- Long conversations stay fast: output from earlier replies is shortened in what Sage remembers, and it re-reads a file when it needs the exact text.
+- Sage plans better: it says up front when something isn't possible with its tools instead of trying anyway, and it knows where your OS, shell and folders are.
+
+### Changed
+
+- **The workspace is the one place for local resources.** Every relative path a command takes (`push`, `render --file`, `new --output`) is relative to the workspace, never the folder you're in, so it doesn't matter where you start sagex or run a command. The terminal app opens in the workspace and moves there when you change it (F3). Sage works only there: its sagex commands, files and shell commands all run in the workspace, and paths it passes to sagex can't leave it. (Secret files for `--secret-file` are still read from wherever you point.)
+
+### Fixed
+
+- `push script <name>` could upload the wrong file: a same-named file in the current folder (such as a leftover `sagex new script` template) won over the one in `<workspace>/scripts/`. Push now looks only in the workspace, lists both files if `<workspace>/x` and `<workspace>/scripts/x` differ, and always prints which local file it used.
+- "No value for 'NAME'" now says it's the script's `{{NAME}}` input with no default.
+- When Sage hits its step limit for one request it ends with a short summary and a note that it stopped, instead of a half-written tool call.
 
 Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. Commands that sign in, take a secret or print one (`auth`, keys, trigger secrets, `--reveal`) are never available to Sage, and a run that needs a secret typed at a hidden prompt is handed back to you to run with `!`.
 

@@ -82,7 +82,9 @@ def test_sage_reply_streams_into_the_transcript(monkeypatch, tmp_path):
             (reply,) = list(app.query("ChatMessage.sage"))
             assert reply.body == "Run `!sagex list workflow`."
             assert not app._busy and app.query_one("#prompt-row").display   # prompt is back
-        assert fake.turns == [("what workflows", None)]
+        ((text, context),) = fake.turns
+        assert text == "what workflows" and set(context) == {"env"}      # where the tools act
+        assert set(context["env"]) == {"os", "shell", "workspace"}       # never the cwd
         assert fake.closed                                                 # socket closed on exit
 
     asyncio.run(scenario())
@@ -122,10 +124,10 @@ def test_last_command_becomes_context_once(monkeypatch, tmp_path):
                 await pilot.press(*question, "enter")
                 await _settle(pilot, app)
         (first_text, first_ctx), (_, second_ctx) = fake.turns
-        assert first_ctx == {"last_command": {"command": "sagex run workflow deploy",
-                                              "exit_code": 1,
-                                              "output": "ERROR: connection refused"}}
-        assert second_ctx is None
+        assert first_ctx["last_command"] == {"command": "sagex run workflow deploy",
+                                             "exit_code": 1,
+                                             "output": "ERROR: connection refused"}
+        assert "last_command" not in second_ctx and "env" in second_ctx
 
     asyncio.run(scenario())
 
@@ -401,3 +403,213 @@ def test_unknown_slash_command(monkeypatch, tmp_path):
             assert fake.turns == []                            # never sent to Sage
 
     asyncio.run(scenario())
+
+
+# --- files and the shell (phase 1.4c) ---------------------------------------------------
+
+def _local_app(monkeypatch, tmp_path, frames):
+    """An app whose workspace (and terminal folder) is a fresh temp folder."""
+    monkeypatch.setattr(tool_card_module, "ARM_SECONDS", 0)
+    ws = tmp_path / "ws"
+    (ws / "scripts").mkdir(parents=True)
+    monkeypatch.chdir(ws)
+    app, fake = _tool_app(monkeypatch, tmp_path, [*frames, {"type": "done", "cancelled": False}])
+    # sagex's settings folder must not contain the workspace (Sage never touches it).
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "cfg" / "config.json")
+    return app, fake, ws
+
+
+def _write(path, content, call_id="t1"):
+    return {"type": "tool_call", "id": call_id, "name": "write_file", "path": path,
+            "content": content, "summary": f"Create {path}"}
+
+
+def test_write_file_previews_asks_then_writes(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path,
+                               [_write("scripts/cpu.sh", "#!/bin/bash\nuptime\n")])
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"make a cpu script", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert card.command == "write scripts/cpu.sh  (new file, 2 lines)"
+            assert card.lines == ["#!/bin/bash", "uptime"]            # the preview
+            assert [k for k, _ in card._choices] == ["y", "a", "n"]
+            assert not (ws / "scripts" / "cpu.sh").exists()           # nothing before the answer
+            await pilot.press("y")
+            await _settle(pilot, app)
+            assert card.state == "ok"
+
+    asyncio.run(scenario())
+    assert (ws / "scripts" / "cpu.sh").read_bytes() == b"#!/bin/bash\nuptime\n"
+    assert fake.results[0]["output"].startswith("Created scripts/cpu.sh")
+
+
+def test_allowing_a_file_covers_rewrites_of_it(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        _write("scripts/a.sh", "echo 1\n", "t1"), _write("scripts/a.sh", "echo 2\n", "t2"),
+        _write("scripts/b.sh", "echo b\n", "t3")])
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"write them", "enter")
+            await _until(pilot, lambda: _asking(app))
+            await pilot.press("a")
+            await _until(pilot, lambda: len(list(app.query(ToolCard))) == 3 and _asking(app))
+            first, second, third = list(app.query(ToolCard))
+            assert second._note.startswith("allowed for this session") and second.diff
+            assert third.state == "asking"                          # b.sh is another file: asks
+            await pilot.press("n")
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    assert (ws / "scripts" / "a.sh").read_bytes() == b"echo 2\n"
+    assert not (ws / "scripts" / "b.sh").exists()
+    assert "chose not to run" in fake.results[2]["error"]
+
+
+def test_edit_file_shows_a_diff_and_shares_the_files_allowance(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        _write("scripts/a.sh", "echo one\necho two\n", "t1"),
+        {"type": "tool_call", "id": "t2", "name": "edit_file", "path": "scripts/a.sh",
+         "edits": [{"old_text": "echo two", "new_text": "echo 2"}], "summary": "Use a digit"},
+        {"type": "tool_call", "id": "t3", "name": "edit_file", "path": "scripts/a.sh",
+         "edits": [{"old_text": "echo three", "new_text": "x"}], "summary": "Nope"}])
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"write then fix", "enter")
+            await _until(pilot, lambda: _asking(app))
+            await pilot.press("a")                                     # allow writing a.sh
+            await _settle(pilot, app)
+            _, edit, bad = list(app.query(ToolCard))
+            assert edit.command == "scripts/a.sh".join(("edit ", "  (1 change)"))
+            assert edit.diff and "+echo 2" in edit.lines and edit._note.startswith("allowed")
+            assert bad.state == "refused"
+
+    asyncio.run(scenario())
+    assert (ws / "scripts" / "a.sh").read_bytes() == b"echo one\necho 2\n"
+    assert fake.results[1]["output"] == "Edited scripts/a.sh (1 change; now 2 lines)."
+    assert "wasn't found" in fake.results[2]["error"]
+
+
+def test_file_outside_the_workspace_is_refused_without_asking(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "read_file", "path": "../secret.txt"},
+        {"type": "tool_call", "id": "t2", "name": "read_file", "path": ".env"}])
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"read them", "enter")
+            await _settle(pilot, app)
+            assert [c.state for c in app.query(ToolCard)] == ["refused", "refused"]
+
+    asyncio.run(scenario())
+    assert "outside the workspace" in fake.results[0]["error"]
+    assert "secrets" in fake.results[1]["error"]
+
+
+def test_read_file_shows_what_sage_would_see_then_sends_it(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "read_file", "path": "scripts/a.sh"}])
+    (ws / "scripts" / "a.sh").write_text("echo hi\n")
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"read a.sh", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert card.lines == ["echo hi"] and card.command == "read scripts/a.sh"
+            assert fake.results == []                                    # not sent before approval
+            await pilot.press("y")
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    assert "    1  echo hi" in fake.results[0]["output"]
+
+
+def test_delete_file_always_asks(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "delete_file", "path": "old.sh",
+         "summary": "Delete old.sh"}])
+    (ws / "old.sh").write_text("x\n")
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"delete old.sh", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert [k for k, _ in card._choices] == ["y", "n"] and "Can't be undone" in card.warning
+            await pilot.press("y")
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    assert not (ws / "old.sh").exists() and fake.results[0]["output"] == "Deleted old.sh."
+
+
+def test_shell_command_runs_in_the_users_shell_without_the_key(monkeypatch, tmp_path):
+    ran = []
+
+    def fake_run(self, on_line, on_event=None):
+        ran.append((self.argv, self.env, self.cwd, on_event))
+        self.lines.append("Python 3.12.1")
+        on_line("Python 3.12.1")
+        return 0
+
+    monkeypatch.setattr(sage_tools.CommandRun, "run", fake_run)
+    monkeypatch.setenv("SAGEX_API_KEY", "sgx_should_not_leak")
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "run_shell", "command": "python --version",
+         "summary": "Check the Python version"}])
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"python version?", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert card.command == "python --version" and card.glyph.startswith(app.session.shell)
+            await pilot.press("y")
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    ((argv, env, cwd, on_event),) = ran
+    assert argv == app.session.invocation("python --version")
+    assert "SAGEX_API_KEY" not in env and on_event is None and cwd == str(ws)
+    assert fake.results[0]["output"] == "Python 3.12.1"
+
+
+def test_shell_cant_be_used_for_sagex_or_env_dumps(monkeypatch, tmp_path):
+    monkeypatch.setattr(sage_tools.CommandRun, "run",
+                        lambda self, on_line, on_event=None: (_ for _ in ()).throw(AssertionError("ran")))
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "run_shell", "command": "sagex show key k --reveal"},
+        {"type": "tool_call", "id": "t2", "name": "run_shell", "command": "Get-ChildItem env:"}])
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            await pilot.press(*"show it", "enter")
+            await _settle(pilot, app)
+            assert [c.state for c in app.query(ToolCard)] == ["refused", "refused"]
+
+    asyncio.run(scenario())
+    assert "sagex_read" in fake.results[0]["error"] and "environment" in fake.results[1]["error"]
+
+
+def test_risky_shell_command_always_asks(monkeypatch, tmp_path):
+    app, fake, ws = _local_app(monkeypatch, tmp_path, [
+        {"type": "tool_call", "id": "t1", "name": "run_shell", "command": "rm -rf build",
+         "summary": "Clean the build folder"}])
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"clean up", "enter")
+            await _until(pilot, lambda: _asking(app))
+            (card,) = _asking(app)
+            assert [k for k, _ in card._choices] == ["y", "n"] and "can't be undone" in card.warning
+            await pilot.press("n")
+            await _settle(pilot, app)
+
+    asyncio.run(scenario())
+    assert "chose not to run" in fake.results[0]["error"]

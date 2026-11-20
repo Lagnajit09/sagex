@@ -6,7 +6,7 @@ version: autobot's sage/conversation.py):
 
     → hello{index, tools} (once)  · turn{text, context}  · tool_result{id, …}  · cancel
     ← ready{features} · hello{tools} · token{text} · tool_call{id, name, args}
-      · done{cancelled, model, usage} · error{code, message, fatal}
+      · done{cancelled, model, usage, limit_reached} · error{code, message, fatal}
 
 A `tool_call` is answered by the app (sage_tools decides whether it may run)
 with `send_tool_result` while `turn()` waits for the next frame.

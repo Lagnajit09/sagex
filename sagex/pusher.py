@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from sagex.config import workspace_path
 from sagex.copier import safe_name
 
 # Fields the workflow write endpoints accept; everything else (timestamps, id) is
@@ -114,13 +115,15 @@ class WorkflowFileNotFound(Exception):
 
 
 def resolve_workflow_file(workspace: Path, ref: str) -> Path:
-    """Find a workflow file by explicit path, or by name under <ws>/workflows/.
+    """Find a workflow file by path, or by name under <ws>/workflows/.
 
-    Tries, in order: the ref as a path; then <ws>/workflows/{ref}, {ref}.json, and
-    the sanitized {safe}.json (so a display name like "Nightly Disk Cleanup" finds
-    the copied "Nightly_Disk_Cleanup.json").
+    Tries, in order: the ref as a path (relative ones are under the workspace,
+    never the current folder); then <ws>/workflows/{ref}, {ref}.json, and the
+    sanitized {safe}.json (so a display name like "Nightly Disk Cleanup" finds the
+    copied "Nightly_Disk_Cleanup.json"). Raises config.OutsideWorkspace for a path
+    Sage may not use.
     """
-    direct = Path(ref)
+    direct = workspace_path(ref, workspace)
     if direct.is_file():
         return direct
 
@@ -233,22 +236,39 @@ class ScriptFileNotFound(Exception):
         self.matches = matches or []          # >1 hit when a bare name is ambiguous
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
 def resolve_script_file(workspace: Path, ref: str) -> Path:
-    """Find a script file by explicit path, or by name under <ws>/scripts/.
+    """Find a script file by path, or by name under <ws>/scripts/.
 
-    Tries: the ref as a path; then <ws>/scripts/{ref}. If ref has no extension,
-    globs <ws>/scripts/{ref}.* and returns it only when exactly one file matches
-    (raises with the candidates when several do).
+    Relative refs are under the workspace, never the current folder: tries
+    <ws>/{ref} and <ws>/scripts/{ref} (an absolute ref is used as given). Exactly
+    one file among them: that's it. Two *different* files (`<ws>/x.sh` and
+    `<ws>/scripts/x.sh`) raise with both, never pick one silently: pushing the
+    wrong one overwrites the script on the server. If ref has no extension, globs
+    <ws>/scripts/{ref}.* and returns it only when exactly one file matches.
+    Raises config.OutsideWorkspace for a path Sage may not use.
     """
-    direct = Path(ref)
-    if direct.is_file():
-        return direct
-
+    direct = workspace_path(ref, workspace)
     folder = workspace / "scripts"
-    exact = folder / ref
-    looked = [direct, exact]
-    if exact.is_file():
-        return exact
+    candidates = [direct] if Path(ref).expanduser().is_absolute() else [direct, folder / ref]
+    looked: list[Path] = []
+    found: list[Path] = []
+    for path in candidates:
+        if path in looked:
+            continue
+        looked.append(path)
+        if path.is_file() and not any(_same_file(path, f) for f in found):
+            found.append(path)
+    if len(found) == 1:
+        return found[0]
+    if found:
+        raise ScriptFileNotFound(ref, looked, matches=[p.resolve() for p in found])
 
     if "." not in ref and folder.is_dir():
         matches = sorted(p for p in folder.glob(f"{ref}.*") if p.is_file())

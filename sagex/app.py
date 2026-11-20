@@ -6,6 +6,7 @@ focuses on WHAT widgets exist and HOW they react.
 
 import asyncio
 import os
+import platform
 import shlex
 import time
 
@@ -15,7 +16,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 
-from sagex import config, runview, sage_tools, shell
+from sagex import config, local_tools, runview, sage_tools, shell
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import ACCENT, run_label, trigger_label
 from sagex.sage import SageError, SageSession, command_context
@@ -53,7 +54,11 @@ class SagexApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.config = config.load()                       # persisted settings (~/.sagex)
-        self.session = shell.ShellSession(preferred=self.config.get("shell"))
+        # Workspace = the one folder local resources live in (the "local"
+        # environment). The terminal opens there, wherever sagex was started.
+        ws = self.config.get("workspace")
+        self._workspace = ws if ws and os.path.isdir(ws) else os.getcwd()
+        self.session = shell.ShellSession(preferred=self.config.get("shell"), cwd=self._workspace)
         self._busy = False                                # is a command or Sage reply in progress?
         self._sage = SageSession(hello=sage_tools.hello_frame)   # connected on first use
         self._sage_turn = False                           # is the busy thing a Sage reply?
@@ -66,9 +71,6 @@ class SagexApp(App):
         self._load_gen = 0                                # bumps on every (re)load
         self._pending_loads: set = set()                  # branches still loading (this gen)
 
-        # Workspace = the local folder shown in the "local" environment.
-        ws = self.config.get("workspace")
-        self._workspace = ws if ws and os.path.isdir(ws) else os.getcwd()
         # Start in the server environment if a key is stored, else local-only.
         self._env = "server" if store.get_key() else "local"
 
@@ -120,7 +122,8 @@ class SagexApp(App):
         text.append("Sage", style=f"bold {ACCENT}")
         text.append(", your Autosage assistant — ask why your last command failed\n",
                     style="bright_black")
-        text.append("Sage asks before it changes anything · ", style="bright_black")
+        text.append("Sage asks before it changes anything, opens a file or runs a shell command · ",
+                    style="bright_black")
         text.append("/permissions", style="bold")
         text.append(" to review what you've allowed\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
@@ -203,7 +206,9 @@ class SagexApp(App):
             if not store.get_key():
                 self.add_message("Sign in to talk to Sage: run !sagex auth login", role="notice")
                 return
-            context = {"last_command": self._last_command} if self._last_command else None
+            context: dict = {"env": self._sage_env()}       # where Sage's tools act, this turn
+            if self._last_command:
+                context["last_command"] = self._last_command
             self._last_command = None    # shared once; Sage remembers it from here
             self._sage_turn = True
             self._set_busy(True, "Thinking")
@@ -219,26 +224,28 @@ class SagexApp(App):
         usage = "Usage: /permissions · /permissions revoke <number> · /permissions revoke all"
         if not args:
             if not len(allowances):
-                self.add_message("Sage asks before every change. Press a on an approval card to "
-                                 "let it run that command again without asking, this session.",
-                                 "cmd_output")
+                self.add_message("Sage asks before every change, file access and shell command. "
+                                 "Press a on an approval card to let it do that again without "
+                                 "asking, this session.", "cmd_output")
                 return
-            lines = ["Sage may run these without asking, until you quit sagex:"]
-            lines += [f"  {i}. {sage_tools.Allowances.label(key)}  (any options)"
-                      for i, key in enumerate(allowances.items(), 1)]
-            lines += ["Deletes always ask.", "Revoke: /permissions revoke <number> · /permissions revoke all"]
+            lines = ["Sage may do these without asking, until you quit sagex:"]
+            for i, label in enumerate(allowances.items(), 1):
+                tail = "  (any options)" if label.startswith("`sagex ") else ""
+                lines.append(f"  {i}. {label.replace('`', '')}{tail}")
+            lines += ["Deletes and risky shell commands always ask.",
+                      "Revoke: /permissions revoke <number> · /permissions revoke all"]
             self.add_message("\n".join(lines), "cmd_output")
         elif len(args) == 2 and args[0].lower() == "revoke":
             if args[1].lower() == "all":
                 count = allowances.clear()
-                self.add_message(f"Revoked {count} — Sage asks before every change again.", "notice")
+                self.add_message(f"Revoked {count} — Sage asks before everything again.", "notice")
             else:
-                key = allowances.revoke(int(args[1])) if args[1].isdigit() else None
-                if key is None:
+                label = allowances.revoke(int(args[1])) if args[1].isdigit() else None
+                if label is None:
                     self.add_message(f"No allowance {args[1]!r}. See /permissions.", "notice")
                 else:
-                    self.add_message(f"Revoked: {sage_tools.Allowances.label(key)} — Sage asks "
-                                     "before running it again.", "notice")
+                    self.add_message(f"Revoked: {label.replace('`', '')} — Sage asks before "
+                                     "doing it again.", "notice")
         else:
             self.add_message(usage, "notice")
         self._refresh_prompt()
@@ -270,6 +277,9 @@ class SagexApp(App):
                     self.add_message(frame.get("message") or "", role="notice")
                 elif kind == "done" and frame.get("cancelled"):
                     self.add_message("Stopped.", role="notice")
+                elif kind == "done" and frame.get("limit_reached"):
+                    self.add_message("Sage reached its step limit for one request. Say "
+                                     "\"continue\" to let it carry on from here.", role="notice")
                 elif kind == "error":
                     self.add_message(frame.get("message") or "Sage couldn't answer.", role="notice")
         except SageError as exc:
@@ -286,6 +296,10 @@ class SagexApp(App):
         """
         call_id = str(frame.get("id") or "")
         name = str(frame.get("name") or "")
+        if name in ("read_file", "write_file", "edit_file", "delete_file"):
+            return await self._run_file_tool(call_id, name, frame)
+        if name == "run_shell":
+            return await self._run_shell_tool(call_id, frame)
         words = [str(w) for w in frame.get("args") or []]
 
         def refused(card: ToolCard, reason: str) -> dict:
@@ -322,24 +336,32 @@ class SagexApp(App):
             return refused(card, f"`sagex {' '.join(check.path)}` changes things or runs long, so "
                                  "sagex_read can't run it. Use sagex_change.")
         if change:
-            declined = await self._approve(card, check)
+            grant = sage_tools.grant_for(check)
+            declined = await self._approve(card, grant, "run it" if grant.allowable else "delete it")
             if declined:
                 return {"type": "tool_result", "id": call_id, "error": declined}
 
-        width = self.query_one("#chat-log", VerticalScroll).size.width - 6
         run = sage_tools.CommandRun(
-            words, cwd=self.session.cwd, width=width,
+            words, cwd=self._sage_workspace(), width=self._card_width(),
             timeout=sage_tools.CHANGE_TIMEOUT if change else sage_tools.READ_TIMEOUT)
+        return await self._stream_run(call_id, card, run, f"Running sagex {' '.join(check.path)}",
+                                      live_graph=change)
+
+    async def _stream_run(self, call_id: str, card: ToolCard, run: sage_tools.CommandRun,
+                          activity: str, *, live_graph: bool = False) -> dict:
+        """Run a command for Sage, streaming its output into its card; its tool_result."""
         self._sage_run = run
-        self.query_one("#command-activity", ActivityLine).set(f"Running sagex {' '.join(check.path)}")
+        self.query_one("#command-activity", ActivityLine).set(activity)
         started = time.monotonic()
         try:
             code = await asyncio.to_thread(
                 run.run,
                 lambda line: self.call_from_thread(self._append_card_line, card, line),
-                (lambda event: self.call_from_thread(card.run_event, event)) if change else None)
+                (lambda event: self.call_from_thread(card.run_event, event)) if live_graph else None)
         except OSError as exc:
-            return refused(card, f"Couldn't start sagex: {exc}")
+            reason = f"Couldn't start it: {exc}"
+            card.refuse(reason)
+            return {"type": "tool_result", "id": call_id, "error": reason}
         finally:
             self._sage_run = None
         elapsed = time.monotonic() - started
@@ -355,18 +377,160 @@ class SagexApp(App):
             card.finish(code, elapsed, sage_saw=saw)
         return result
 
-    async def _approve(self, card: ToolCard, check: sage_tools.Check) -> str | None:
-        """Ask the user to approve a change on its card. None when approved,
-        else the reason it didn't run (sent back to Sage)."""
+    # --- Sage's local tools: files and the shell ---------------------------------------
+
+    def _sage_workspace(self) -> str:
+        """Where everything Sage does locally happens: sagex commands, files, shell.
+
+        Read fresh, so `!sagex workspace set` mid-session counts; never the
+        terminal's current folder (it's where you `cd`, not where resources live).
+        """
+        ws = config.load().get("workspace")
+        return ws if ws and os.path.isdir(ws) else self._workspace
+
+    def _sage_env(self) -> dict:
+        """Where Sage's tools act this turn — sent with every question."""
+        return {"os": f"{platform.system()} {platform.release()}".strip(),
+                "shell": self.session.shell, "workspace": self._sage_workspace()}
+
+    def _card_width(self) -> int:
+        return self.query_one("#chat-log", VerticalScroll).size.width - 6
+
+    async def _run_file_tool(self, call_id: str, name: str, frame: dict) -> dict:
+        """read_file / write_file / edit_file / delete_file: checked here, approved on the card.
+
+        Writes and edits of one file share an allowance ("writing scripts/a.sh")."""
+        verb = name.split("_")[0]                       # read | write | edit | delete
+        raw = str(frame.get("path") or "")
+        summary = _one_line(frame.get("summary")) or None
+
+        def result(output: str) -> dict:
+            return {"type": "tool_result", "id": call_id, "exit_code": 0, "output": output}
+
+        def refused(card: ToolCard, reason: str) -> dict:
+            card.refuse(reason)
+            return {"type": "tool_result", "id": call_id, "error": reason}
+
+        try:
+            target = local_tools.resolve(raw, workspace=self._sage_workspace(),
+                                         extra_protected=(str(config.CONFIG_DIR),))
+        except local_tools.LocalToolError as exc:
+            card = ToolCard(name, f"{verb} {raw}", glyph="▸ ")
+            self._mount_entry(card)
+            return refused(card, str(exc))
+
+        if name == "read_file":
+            offset = frame.get("offset")
+            card = ToolCard(name, f"read {target.shown}", glyph="▸ ")
+            self._mount_entry(card)
+            try:                                        # local only: nothing reaches Sage before approval
+                read = local_tools.read(target, offset if isinstance(offset, int) else 1)
+            except (local_tools.LocalToolError, OSError) as exc:
+                return refused(card, str(exc))
+            card.set_lines(read.lines)                  # what Sage would see
+            folder = target.path if os.path.isdir(target.path) else os.path.dirname(target.path)
+            grant = sage_tools.Grant(("read", os.path.normcase(folder)), f"reading files in {folder}")
+            declined = await self._approve(card, grant, "let Sage read it")
+            if declined:
+                return {"type": "tool_result", "id": call_id, "error": declined}
+            card.finish(0, None, sage_saw=f"Sage saw {read.seen}")
+            return result(read.output)
+
+        if name in ("write_file", "edit_file"):
+            editing = name == "edit_file"
+            try:
+                plan = (local_tools.plan_edit(target, frame.get("edits")) if editing
+                        else local_tools.plan_write(target, frame.get("content")))
+            except (local_tools.LocalToolError, OSError) as exc:
+                card = ToolCard(name, f"{verb} {target.shown}", summary=summary, glyph="▸ ")
+                self._mount_entry(card)
+                return refused(card, str(exc))
+            overwrite = plan.exists and not plan.unchanged and not editing
+            card = ToolCard(name, plan.headline,
+                            summary=summary or f"{verb.capitalize()} {target.shown}",
+                            warning="Replaces the current file — the changes are below."
+                            if overwrite else None, glyph="▸ ")
+            self._mount_entry(card)
+            if plan.unchanged:
+                card.finish(0, None, sage_saw="already up to date")
+                return result(f"No change: {target.shown} already has exactly this content.")
+            card.diff = plan.exists
+            card.set_lines(plan.preview)
+            grant = sage_tools.Grant(("write", os.path.normcase(target.path)), f"writing {target.shown}")
+            declined = await self._approve(card, grant, "make the change" if editing else "write it")
+            if declined:
+                return {"type": "tool_result", "id": call_id, "error": declined}
+            try:
+                message = local_tools.write(plan)
+            except OSError as exc:
+                return refused(card, f"Couldn't write {target.shown}: {exc.strerror or exc}")
+            card.finish(0, None, sage_saw="written")
+            self._reload_workspace_tree()
+            return result(message)
+
+        # delete_file
+        card = ToolCard(name, f"delete {target.shown}", glyph="▸ ",
+                        summary=summary or f"Delete {target.shown}",
+                        warning="Deletes the file from your disk (not to the recycle bin). "
+                                "Can't be undone.")
+        self._mount_entry(card)
+        try:
+            local_tools.check_delete(target)
+        except local_tools.LocalToolError as exc:
+            return refused(card, str(exc))
+        grant = sage_tools.Grant(("delete", os.path.normcase(target.path)), target.shown, allowable=False)
+        declined = await self._approve(card, grant, "delete it")
+        if declined:
+            return {"type": "tool_result", "id": call_id, "error": declined}
+        try:
+            message = local_tools.delete(target)
+        except OSError as exc:
+            return refused(card, f"Couldn't delete {target.shown}: {exc.strerror or exc}")
+        card.finish(0, None, sage_saw="deleted")
+        self._reload_workspace_tree()
+        return result(message)
+
+    async def _run_shell_tool(self, call_id: str, frame: dict) -> dict:
+        """run_shell: one non-interactive command in the user's shell, after approval."""
+        command = str(frame.get("command") or "").strip()
+        summary = _one_line(frame.get("summary")) or None
+        shell_name = self.session.shell
+        risk = local_tools.shell_risk(command)
+        card = ToolCard("run_shell", command, summary=summary, warning=risk.warning,
+                        glyph=f"{shell_name} ❯ ")
+        self._mount_entry(card)
+        try:
+            local_tools.check_shell(command)
+        except local_tools.LocalToolError as exc:
+            card.refuse(str(exc))
+            return {"type": "tool_result", "id": call_id, "error": str(exc)}
+        grant = sage_tools.Grant(("shell", shell_name, command), f"`{command}` in {shell_name}",
+                                 allowable=not risk.always_ask)
+        declined = await self._approve(card, grant, "run it")
+        if declined:
+            return {"type": "tool_result", "id": call_id, "error": declined}
+        run = sage_tools.CommandRun(
+            [], cwd=self._sage_workspace(), width=self._card_width(), timeout=local_tools.SHELL_TIMEOUT,
+            argv=self.session.invocation(command), env=local_tools.shell_env(dict(os.environ)))
+        return await self._stream_run(call_id, card, run, f"Running {command[:60]}")
+
+    def _reload_workspace_tree(self) -> None:
+        try:
+            self.query_one("#workspace-tree", DirectoryTree).reload()
+        except Exception:
+            pass                                        # cosmetic only
+
+    async def _approve(self, card: ToolCard, grant: sage_tools.Grant, yes_label: str) -> str | None:
+        """Ask the user to approve a tool call on its card. None when approved,
+        else the reason it didn't happen (sent back to Sage)."""
         allowed_note = "allowed for this session · /permissions to change"
-        if self._allowances.allows(check):
+        if self._allowances.allows(grant):
             card.approved(allowed_note)
             return None
-        key = sage_tools.Allowances.key(check)
-        choices = [("y", "delete it" if check.always_ask else "run it")]
-        if self._allowances.can_allow(check):
-            choices.append(("a", f"allow `{sage_tools.Allowances.label(key)}` this session"))
-        choices.append(("n", "don't run"))
+        choices = [("y", yes_label)]
+        if grant.allowable:
+            choices.append(("a", f"allow {grant.label} this session"))
+        choices.append(("n", "no"))
 
         activity = self.query_one("#command-activity", ActivityLine)
         activity.set("Waiting for your approval", " · ".join(k for k, _ in choices) + " · esc to stop")
@@ -385,7 +549,7 @@ class SagexApp(App):
             card.approved("approved once")
             return None
         if answer == "a":
-            self._allowances.allow(check)
+            self._allowances.allow(grant)
             card.approved(allowed_note)
             self._refresh_prompt()
             return None
@@ -395,8 +559,9 @@ class SagexApp(App):
         if answer is None:
             card.decline("stopped")
             return "The user stopped this before it ran."
-        card.decline("you chose not to run it")
-        return "The user chose not to run this. Don't retry it; ask what they'd like instead."
+        card.decline("you said no")
+        return ("The user chose not to run this. Don't retry it or do the same thing another "
+                "way; ask what they'd like instead.")
 
     def _append_card_line(self, card: ToolCard, line: str) -> None:
         card.append_line(line)
@@ -572,6 +737,8 @@ class SagexApp(App):
         self._workspace = resolved
         self.config["workspace"] = resolved
         config.save(self.config)
+        self.session.cwd = resolved          # the terminal follows: one place for local work
+        self._refresh_prompt()
         self.query_one("#workspace-input", Input).value = resolved
         self.query_one("#workspace-tree", DirectoryTree).path = resolved   # reactive -> reloads
         self._update_env_status()        # refresh "local · <path>"

@@ -97,11 +97,11 @@ def available_shells() -> list[str]:
 class ShellSession:
     """Runs commands in a chosen shell, remembering the working directory."""
 
-    def __init__(self, preferred: str | None = None) -> None:
+    def __init__(self, preferred: str | None = None, cwd: str | None = None) -> None:
         self.shells = available_shells()
         # Use the remembered shell if it's still available, otherwise the default.
         self.shell = preferred if preferred in self.shells else self.shells[0]
-        self.cwd = os.getcwd()
+        self.cwd = cwd if cwd and os.path.isdir(cwd) else os.getcwd()
         self._proc: subprocess.Popen | None = None   # the currently running command
 
     @property
@@ -197,6 +197,10 @@ class ShellSession:
             except Exception:
                 pass
         return True
+
+    def invocation(self, command: str) -> list[str]:
+        """The argv that runs `command` in the current shell (Sage's shell tool uses it)."""
+        return self._invocation(command)
 
     def _invocation(self, command: str) -> list[str]:
         """Build the argv list that runs `command` in the chosen shell.
