@@ -28,6 +28,11 @@ Header, Footer, Tree {
     color: $text-muted;
     padding: 0 1;
 }
+#sage-usage {
+    height: auto;               /* two short lines, always at the bottom of the panel */
+    padding: 0 1;
+    border-top: solid $primary 40%;
+}
 
 /* Right: the terminal-style transcript — entries flow down to the prompt line. */
 #chat-log {

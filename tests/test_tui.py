@@ -9,10 +9,27 @@ from sagex.widgets.message import ChatMessage
 from sagex.widgets.tool_card import ToolCard
 
 
-def _isolate(monkeypatch, tmp_path, key):
+USAGE = {"today": {"requests": 4, "total_tokens": 48210}, "admin_quota": {"used": 26, "limit": 30,
+                                                                         "remaining": 4},
+         "own_key": False}
+
+
+def _isolate(monkeypatch, tmp_path, key, usage=None):
+    from sagex.api import resources
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
     monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(store, "get_key", lambda: key)
+    # Never the network: the sidebar's usage fetch gets canned data (or fails).
+    usage_calls = []
+
+    def fake_usage(client=None):
+        usage_calls.append(1)
+        if usage is None:
+            from sagex.api import ApiError
+            raise ApiError("offline", status=None)
+        return usage
+    monkeypatch.setattr(resources, "sage_usage", fake_usage)
+    return usage_calls
 
 
 async def _settle(pilot, app, timeout=5.0):
@@ -144,6 +161,58 @@ def test_sessions_lists_reopens_and_deletes(monkeypatch, tmp_path):
             await pilot.press(*"/new", "enter")
             await pilot.pause(0.2)
             assert fake.fresh == 2
+
+    asyncio.run(scenario())
+
+
+def test_usage_block_updates_from_replies_and_usage_prints_details(monkeypatch, tmp_path):
+    full = {**USAGE, "last_7d": {"requests": 9, "total_tokens": 90000, "byo_tokens": 0,
+                                 "admin_tokens": 90000,
+                                 "model_usage": [{"provider": "groq", "model": "llama", "count": 9}]},
+            "all_time": {"requests": 9, "total_tokens": 90000},
+            "daily": [{"date": f"d{i}", "requests": i} for i in range(7)],
+            "devices": [{"device": "laptop", "requests": 9}]}
+    calls = _isolate(monkeypatch, tmp_path, "sgx_test", usage=full)
+    monkeypatch.setattr(SagexApp, "_start_loaders", lambda self: None)
+    fake = FakeSage([{"type": "token", "text": "Hi"},
+                     {"type": "done", "cancelled": False, "byo": False, "usage": {"total_tokens": 1790},
+                      "quota": {"used": 27, "limit": 30, "remaining": 3}}])
+
+    async def scenario():
+        app = SagexApp()
+        app._sage = fake
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            block = app.query_one("#sage-usage")
+            assert block.display
+            text = str(block.render())
+            assert "4 replies · 48.2k tokens" in text and "4 of 30 left" in text
+            await pilot.press(*"hi", "enter")
+            await _settle(pilot, app)
+            text = str(block.render())
+            assert "5 replies · 50k tokens" in text and "3 of 30 left" in text
+            assert len(calls) == 1                                  # updated without a fetch
+            await pilot.press(*"/usage", "enter")
+            await pilot.pause(0.4)
+            report = app.query("ChatMessage.cmd_output").last().body
+            assert "Last 7 days" in report and "groq/llama (9)" in report and "laptop (9)" in report
+            assert "4 of 30 left" in report          # /usage refetched (the canned server data)
+
+    asyncio.run(scenario())
+
+
+def test_usage_block_stays_hidden_when_it_cant_load(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path, "sgx_test")                     # the fetch fails
+    monkeypatch.setattr(SagexApp, "_start_loaders", lambda self: None)
+
+    async def scenario():
+        app = SagexApp()
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            assert not app.query_one("#sage-usage").display
+            await pilot.press(*"/usage", "enter")
+            await pilot.pause(0.3)
+            assert app.query("ChatMessage.notice").last().body == "offline"
 
     asyncio.run(scenario())
 

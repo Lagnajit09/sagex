@@ -16,7 +16,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 
-from sagex import config, local_tools, runview, sage_tools, shell
+from sagex import config, local_tools, runview, sage_tools, shell, usage
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import ACCENT, run_label, trigger_label
 from sagex.sage import SageError, SageSession, command_context
@@ -66,6 +66,7 @@ class SagexApp(App):
         self._asking: ToolCard | None = None              # a change waiting for approval
         self._allowances = sage_tools.Allowances()        # changes allowed for this session
         self._session_rows: list[dict] = []               # the last /sessions list (numbered)
+        self._today: usage.Today | None = None            # the sidebar's usage block, once loaded
         self._last_command: dict | None = None            # context for the next Sage question
         self._selected_label: str | None = None                  # the highlighted resource, if any
         self._run_graph: RunGraph | None = None           # live graph of the running command
@@ -92,6 +93,7 @@ class SagexApp(App):
                 yield DirectoryTree(self._workspace, id="workspace-tree")  # local environment
                 yield ActivityLine(id="resources-activity")                # while branches load
                 yield Static(id="resources-status")
+                yield Static(id="sage-usage")                              # Sage today (usage.py)
 
             # Right: a terminal-style transcript. You type on the prompt line at its
             # end; new entries are inserted above it, so the prompt always stays last.
@@ -128,7 +130,9 @@ class SagexApp(App):
         text.append("/permissions", style="bold")
         text.append(" to review what you've allowed · ", style="bright_black")
         text.append("/sessions", style="bold")
-        text.append(" to reopen a conversation\n", style="bright_black")
+        text.append(" to reopen a conversation · ", style="bright_black")
+        text.append("/usage", style="bold")
+        text.append(" for what you've used\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
                     style="bright_black")
         return text
@@ -159,6 +163,9 @@ class SagexApp(App):
         self._apply_env()                # show the right tree + status for the current env
         if self._env == "server":
             self._start_loaders()        # fetch server resources (concurrently, off-thread)
+        self._show_usage()
+        if store.get_key():
+            self._load_usage()           # the sidebar's "Sage today" block
         self.query_one("#chat-input", PromptInput).focus()   # ready to type straight away
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
@@ -221,14 +228,20 @@ class SagexApp(App):
             entry.remove()
 
     def _app_command(self, words: list[str]) -> None:
-        """`/permissions`, `/sessions` and `/new`."""
+        """`/permissions`, `/sessions`, `/new` and `/usage`."""
         name, args = (words[0].lower(), words[1:]) if words else ("", [])
         if name in ("sessions", "new"):
             self._sessions_command(name, args)
             return
+        if name == "usage":
+            if not store.get_key():
+                self.add_message("Sign in to see your SageCode usage: run !sagex auth login", "notice")
+            else:
+                self._load_usage(report=True)
+            return
         if name != "permissions":
-            self.add_message(f"Unknown command /{name}. Available: /permissions, /sessions, /new",
-                             "notice")
+            self.add_message("Unknown command /" + name + ". Available: /permissions, /sessions, "
+                             "/new, /usage", "notice")
             return
         allowances = self._allowances
         usage = "Usage: /permissions · /permissions revoke <number> · /permissions revoke all"
@@ -369,6 +382,12 @@ class SagexApp(App):
         try:
             async for frame in self._sage.turn(text, context):
                 kind = frame.get("type")
+                if self._today is not None and kind in ("done", "error"):
+                    if kind == "done":
+                        self._today.apply_done(frame)          # no request per reply
+                    elif frame.get("code") == "admin_quota_exhausted":
+                        self._today.allowance_used_up()
+                    self._show_usage()
                 if kind == "token":
                     if reply is None:
                         reply = ChatMessage("", "sage")
@@ -814,6 +833,36 @@ class SagexApp(App):
             self._start_loaders()
         else:
             self.query_one("#workspace-tree", DirectoryTree).reload()
+        if store.get_key():
+            self._load_usage()
+
+    # --- SageCode usage (sidebar block + /usage) ------------------------------------
+
+    @work(thread=True, group="usage", exclusive=True)
+    def _load_usage(self, report: bool = False) -> None:
+        """Fetch usage; refresh the sidebar, and print the details for /usage.
+        A silent failure for the sidebar (it just stays hidden); /usage says why."""
+        try:
+            data = resources.sage_usage()
+        except ApiError as exc:
+            if report:
+                message = ("SageCode usage needs a newer Autosage server." if exc.status == 404
+                           else exc.message)
+                self.call_from_thread(self.add_message, message, "notice")
+            return
+        self.call_from_thread(self._usage_loaded, data, report)
+
+    def _usage_loaded(self, data: dict, report: bool) -> None:
+        self._today = usage.Today.from_usage(data)
+        self._show_usage()
+        if report:
+            self.add_message(usage.report(data), "cmd_output")
+
+    def _show_usage(self) -> None:
+        block = self.query_one("#sage-usage", Static)
+        block.display = self._today is not None and bool(store.get_key())
+        if block.display:
+            block.update(self._today.sidebar())
 
     def action_toggle_env(self) -> None:
         """F3: switch between the server and local environments (only when logged in)."""

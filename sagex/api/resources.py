@@ -65,6 +65,15 @@ def delete_sage_conversation(client: ApiClient, conversation_id: str) -> None:
     client.delete(f"/api/sage/conversations/{conversation_id}/")
 
 
+def sage_usage(client: ApiClient | None = None) -> dict:
+    """SageCode usage plus the shared free allowance (from Sage, not Django:
+    the allowance counter lives with Sage)."""
+    from sagex import config
+    from sagex.api import store
+    client = client or ApiClient(config.ai_url(), store.get_key())
+    return client.get("/sage/usage/") or {}
+
+
 def list_triggers(client: ApiClient) -> list[tuple[str, str, bool]]:
     """Return configured triggers as (workflow_name, detail, is_active).
 
