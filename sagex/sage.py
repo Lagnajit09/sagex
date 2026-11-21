@@ -4,12 +4,17 @@ The socket lives at `<ai_url>/sage/ws` and authenticates with this session's API
 key (the same headers every sagex request sends). Protocol, in short (full
 version: autobot's sage/conversation.py):
 
-    → hello{index, tools} (once)  · turn{text, context}  · tool_result{id, …}  · cancel
-    ← ready{features} · hello{tools} · token{text} · tool_call{id, name, args}
-      · done{cancelled, model, usage, limit_reached} · error{code, message, fatal}
+    → hello{index, tools, conversation?} (once)  · turn{text, context}  · tool_result{id, …}  · cancel
+    ← ready{features} · hello{tools, conversation?, message?} · token{text}
+      · tool_call{id, name, args} · notice{message}
+      · done{cancelled, model, usage, limit_reached, conversation_id?} · error{code, message, fatal}
 
 A `tool_call` is answered by the app (sage_tools decides whether it may run)
 with `send_tool_result` while `turn()` waits for the next frame.
+
+Conversations are saved on the server (a "sessions" feature in `ready`). The
+id arrives on `done`; reconnecting after a drop resumes the same conversation,
+`open()` resumes an earlier one (/sessions) and `new()` starts afresh.
 
 Async on purpose: the TUI runs it as a Textual worker on the app's own loop, so
 tokens land in the transcript without thread hops.
@@ -98,7 +103,16 @@ class SageSession:
         self._ever_connected = False
         self._hello = hello
         self.tools: list[str] = []           # what the server accepted for this connection
+        self.features: list[str] = []        # what the server said it supports (ready)
         self._notice: str | None = None      # e.g. the server couldn't use the index
+        # The saved conversation this session is in (None: a new one starts
+        # with the next message), and what the server said when it resumed one.
+        self.conversation_id: str | None = None
+        self.resumed: dict | None = None
+
+    @property
+    def saves_conversations(self) -> bool:
+        return "sessions" in self.features
 
     @property
     def connected(self) -> bool:
@@ -134,10 +148,14 @@ class SageSession:
             await ws.close()
             raise SageError(first.get("message") or UNREACHABLE, fatal=bool(first.get("fatal")))
 
-        self.tools, self._notice = [], None
-        if self._hello is not None and "tools" in (first.get("features") or []):
+        self.tools, self._notice, self.resumed = [], None, None
+        self.features = [f for f in first.get("features") or [] if isinstance(f, str)]
+        if self._hello is not None and "tools" in self.features:
+            hello = {"type": "hello", **self._hello()}
+            if self.conversation_id and self.saves_conversations:
+                hello["conversation"] = self.conversation_id
             try:
-                await ws.send(json.dumps({"type": "hello", **self._hello()}))
+                await ws.send(json.dumps(hello))
                 reply = json.loads(await asyncio.wait_for(ws.recv(), _OPEN_TIMEOUT))
             except (ConnectionClosed, TimeoutError, ValueError) as exc:
                 await ws.close()
@@ -145,20 +163,45 @@ class SageSession:
             if reply.get("type") == "hello":
                 self.tools = [t for t in reply.get("tools") or [] if isinstance(t, str)]
                 self._notice = reply.get("message")
+                resumed = reply.get("conversation")
+                if isinstance(resumed, dict) and resumed.get("id"):
+                    self.resumed = resumed
+                elif "conversation" in hello:
+                    self.conversation_id = None      # gone: this connection starts a new one
         self._ws = ws
+
+    async def open(self, conversation_id: str) -> dict:
+        """Resume a saved conversation on a fresh connection. Returns the
+        server's `conversation` (id, title, transcript) or raises SageError
+        with what it said instead."""
+        await self.close()
+        self.conversation_id = conversation_id
+        await self._connect()
+        self._ever_connected = True
+        if self.resumed is None:
+            raise SageError(self._notice or "Sage couldn't open that conversation.")
+        return self.resumed
+
+    async def new(self) -> None:
+        """Start a fresh conversation with the next message."""
+        await self.close()
+        self.conversation_id = None
+        self.resumed = None
+        self._ever_connected = False
 
     async def turn(self, text: str, context: dict | None = None):
         """Send one message; yield the server's frames until `done` or `error`.
 
-        Yields {"type": "reconnected"} first when an earlier conversation ended
-        (idle/drop) — Sage won't remember it, so the UI should say so.
+        Yields {"type": "reconnected", "resumed": bool} first when the earlier
+        connection ended (idle/drop): resumed means the server picked the saved
+        conversation back up; otherwise Sage won't remember it.
         """
         if not self.connected:
             reconnecting = self._ever_connected
             await self._connect()
             self._ever_connected = True
             if reconnecting:
-                yield {"type": "reconnected"}
+                yield {"type": "reconnected", "resumed": self.resumed is not None}
             if self._notice:
                 yield {"type": "notice", "message": self._notice}
 
@@ -169,6 +212,8 @@ class SageSession:
             await self._ws.send(json.dumps(frame))
             while True:
                 message = json.loads(await self._ws.recv())
+                if message.get("type") == "done" and isinstance(message.get("conversation_id"), str):
+                    self.conversation_id = message["conversation_id"]
                 yield message
                 if message.get("type") in ("done", "error"):
                     return

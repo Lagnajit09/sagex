@@ -33,6 +33,19 @@ class FakeSage:
         self.turns = []
         self.results = []
         self.closed = False
+        self.conversation_id = None
+        self.opened = []
+        self.fresh = 0
+
+    async def open(self, conversation_id):
+        self.opened.append(conversation_id)
+        self.conversation_id = conversation_id
+        return {"id": conversation_id, "title": "cpu script", "transcript": [
+            {"prompt": "write a cpu script", "reply": "Done: **scripts/cpu.sh**.", "cancelled": False}]}
+
+    async def new(self):
+        self.fresh += 1
+        self.conversation_id = None
 
     async def turn(self, text, context=None):
         self.turns.append((text, context))
@@ -86,6 +99,51 @@ def test_sage_reply_streams_into_the_transcript(monkeypatch, tmp_path):
         assert text == "what workflows" and set(context) == {"env"}      # where the tools act
         assert set(context["env"]) == {"os", "shell", "workspace"}       # never the cwd
         assert fake.closed                                                 # socket closed on exit
+
+    asyncio.run(scenario())
+
+
+def test_sessions_lists_reopens_and_deletes(monkeypatch, tmp_path):
+    from sagex.app import resources
+    _isolate(monkeypatch, tmp_path, "sgx_test")
+    monkeypatch.setattr(SagexApp, "_start_loaders", lambda self: None)
+    rows = [{"id": "c1", "title": "cpu script", "workspace": "infra", "turns": 4, "device": "laptop",
+             "when": "2h ago"},
+            {"id": "c2", "title": "deploy fix", "workspace": "", "turns": 1, "device": "", "when": "3d ago"}]
+    deleted = []
+    monkeypatch.setattr(resources, "list_sage_conversations", lambda client: list(rows))
+    monkeypatch.setattr(resources, "delete_sage_conversation", lambda client, cid: deleted.append(cid))
+    fake = FakeSage([])
+
+    async def scenario():
+        app = SagexApp()
+        app._sage = fake
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press(*"/sessions 1", "enter")              # nothing listed yet
+            await pilot.pause()
+            assert "Run /sessions first" in app.query("ChatMessage.notice").last().body
+            await pilot.press(*"/sessions", "enter")
+            await _settle(pilot, app)
+            await pilot.pause(0.2)
+            listing = app.query("ChatMessage.cmd_output").last().body
+            assert "1. cpu script  (2h ago · laptop · infra · 4 messages)" in listing
+            assert "2. deploy fix  (3d ago · 1 message)" in listing
+
+            await pilot.press(*"/sessions 1", "enter")
+            await _settle(pilot, app)
+            assert fake.opened == ["c1"]
+            assert [m.body for m in app.query("ChatMessage.user")] == ["write a cpu script"]
+            assert [m.body for m in app.query("ChatMessage.sage")] == ["Done: **scripts/cpu.sh**."]
+            assert "Reopened “cpu script”" in app.query("ChatMessage.notice").last().body
+
+            await pilot.press(*"/sessions delete 1", "enter")       # the open one
+            await pilot.pause(0.3)
+            assert deleted == ["c1"] and fake.fresh == 1
+            assert "starts a new conversation" in app.query("ChatMessage.notice").last().body
+
+            await pilot.press(*"/new", "enter")
+            await pilot.pause(0.2)
+            assert fake.fresh == 2
 
     asyncio.run(scenario())
 

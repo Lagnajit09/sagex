@@ -12,13 +12,13 @@ Output entries grow line by line as a command streams (see append_line); Sage's
 reply grows token by token (see append_text).
 """
 
-from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
 from textual.widgets import Static
 
 from sagex.formatting import ACCENT
+from sagex.sage_text import SageMarkdown, for_display
 
 
 class ChatMessage(Static):
@@ -60,10 +60,12 @@ class ChatMessage(Static):
     def _rebuild(self) -> None:
         if self._role == "sage":
             # Markdown in a 2-column grid so wrapped lines stay indented under "● ".
+            # Model-written, so made safe first (sagex/sage_text.py): no
+            # terminal escapes, only web links clickable, HTML kept readable.
             grid = Table.grid(padding=0)
             grid.add_column(width=2, no_wrap=True)
             grid.add_column(ratio=1)
-            grid.add_row(Text("● ", style=ACCENT), Markdown(self._body or " "))
+            grid.add_row(Text("● ", style=ACCENT), SageMarkdown(for_display(self._body) or " "))
             self.update(grid)
             return
 

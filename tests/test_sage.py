@@ -164,8 +164,73 @@ def test_cancel_and_reconnect(monkeypatch):
 
     first, second_start = _run(monkeypatch, handler, scenario)
     assert first[-1] == {"type": "done", "cancelled": True}
-    assert second_start == {"type": "reconnected"}       # the UI tells the user
+    assert second_start == {"type": "reconnected", "resumed": False}   # the UI tells the user
     assert len(connections) == 2
+
+
+SESSIONS = {"type": "ready", "session_id": "s1", "features": ["tools", "sessions"]}
+
+
+def test_a_dropped_connection_resumes_the_saved_conversation(monkeypatch):
+    hellos = []
+
+    async def handler(ws):
+        await ws.send(json.dumps(SESSIONS))
+        hello = json.loads(await ws.recv())
+        hellos.append(hello)
+        reply = {"type": "hello", "tools": ["sagex_read"]}
+        if hello.get("conversation"):
+            reply["conversation"] = {"id": hello["conversation"], "title": "t", "transcript": []}
+        await ws.send(json.dumps(reply))
+        await ws.recv()                                  # the turn
+        await ws.send(json.dumps({"type": "done", "cancelled": False, "conversation_id": "c1"}))
+        await ws.close(code=4408)                        # idle close after the first turn
+
+    async def scenario(session):
+        await _collect(session, "one")
+        await asyncio.sleep(0.05)
+        return await _collect(session, "two"), session.conversation_id
+
+    second, conversation_id = _run(monkeypatch, handler, scenario, hello=lambda: HELLO)
+    assert "conversation" not in hellos[0] and hellos[1]["conversation"] == "c1"
+    assert second[0] == {"type": "reconnected", "resumed": True}
+    assert conversation_id == "c1"
+
+
+def test_open_resumes_and_new_starts_fresh(monkeypatch):
+    hellos = []
+
+    async def handler(ws):
+        await ws.send(json.dumps(SESSIONS))
+        hello = json.loads(await ws.recv())
+        hellos.append(hello)
+        reply = {"type": "hello", "tools": []}
+        if hello.get("conversation") == "c9":
+            reply["conversation"] = {"id": "c9", "title": "cpu script",
+                                     "transcript": [{"prompt": "hi", "reply": "hello", "cancelled": False}]}
+        elif hello.get("conversation"):
+            reply["message"] = "That conversation is no longer saved."
+        await ws.send(json.dumps(reply))
+        try:
+            await ws.recv()
+            await ws.send(json.dumps({"type": "done", "cancelled": False}))
+        except Exception:
+            pass
+        await ws.wait_closed()
+
+    async def scenario(session):
+        opened = await session.open("c9")
+        with pytest.raises(sage.SageError) as missing:
+            await session.open("gone")
+        gone_id = session.conversation_id
+        await session.new()
+        await _collect(session, "fresh")
+        return opened, missing.value.message, gone_id
+
+    opened, message, gone_id = _run(monkeypatch, handler, scenario, hello=lambda: HELLO)
+    assert opened["title"] == "cpu script" and opened["transcript"][0]["reply"] == "hello"
+    assert "no longer saved" in message and gone_id is None
+    assert [h.get("conversation") for h in hellos] == ["c9", "gone", None]
 
 
 def test_unreachable_server(monkeypatch):

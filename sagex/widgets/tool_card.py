@@ -45,6 +45,7 @@ from textual.widgets import Static
 
 from sagex.formatting import ACCENT
 from sagex.runview import WorkflowRunView
+from sagex.sage_text import strip_controls
 
 LIVE_LINES = 15          # visible while running
 FOLDED_LINES = 8         # visible once finished (until expanded)
@@ -223,7 +224,9 @@ class ToolCard(Static):
         return shown, len(self.lines) - len(shown) + self._dropped, from_end
 
     def _line_text(self, line: str) -> Text:
-        """Output as plain text; a diff preview (an overwrite) gets its colours."""
+        """Output as plain text; a diff preview (an overwrite) gets its colours.
+        Control sequences are removed: a preview is model-written file text."""
+        line = strip_controls(line)
         if self.diff and line and line[0] in "+-@":
             return Text(line, style={"+": "green", "-": "bold red", "@": "cyan"}[line[0]])
         return Text(line)
@@ -237,13 +240,14 @@ class ToolCard(Static):
         color = _COLORS[self._state]
         parts: list = []
         if self.summary:
-            parts.append(Text(self.summary, style="bold"))
+            parts.append(Text(strip_controls(self.summary), style="bold"))
         parts.append(Text.assemble((self.glyph, "bright_black"),
-                                   (self.command, "" if self.summary else "bold")))
+                                   (strip_controls(self.command), "" if self.summary else "bold")))
         if self.warning:
-            parts.append(Text(f"⚠ {self.warning}", style="bold red"))
+            parts.append(Text(f"⚠ {strip_controls(self.warning)}", style="bold red"))
         if self._note:
-            parts.append(Text(self._note, style="yellow" if self._state == "refused" else "bright_black"))
+            parts.append(Text(strip_controls(self._note),
+                              style="yellow" if self._state == "refused" else "bright_black"))
         if self._view is not None:
             parts += [Rule(style="bright_black"), self._view.graph()]
         shown, hidden, hidden_first = self._visible()

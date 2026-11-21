@@ -42,6 +42,29 @@ def list_vault_resources(client: ApiClient) -> list[str]:
     return labels
 
 
+def list_sage_conversations(client: ApiClient, limit: int = 20) -> list[dict]:
+    """Recent saved Sage conversations, newest first: id, title, workspace,
+    turn_count, device and a relative `when`."""
+    data = client.get("/api/sage/conversations/", params={"limit": limit}) or {}
+    out = []
+    for c in data.get("conversations") or []:
+        if not isinstance(c, dict) or not c.get("id"):
+            continue
+        out.append({
+            "id": str(c["id"]),
+            "title": " ".join(str(c.get("title") or "").split()) or "(untitled)",
+            "workspace": str(c.get("workspace") or ""),
+            "turns": int(c.get("turn_count") or 0),
+            "device": str(c.get("device") or ""),
+            "when": relative_time(c.get("last_turn_at") or c.get("created_at")),
+        })
+    return out
+
+
+def delete_sage_conversation(client: ApiClient, conversation_id: str) -> None:
+    client.delete(f"/api/sage/conversations/{conversation_id}/")
+
+
 def list_triggers(client: ApiClient) -> list[tuple[str, str, bool]]:
     """Return configured triggers as (workflow_name, detail, is_active).
 

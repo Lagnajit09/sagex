@@ -65,6 +65,7 @@ class SagexApp(App):
         self._sage_run: sage_tools.CommandRun | None = None   # a command Sage is running
         self._asking: ToolCard | None = None              # a change waiting for approval
         self._allowances = sage_tools.Allowances()        # changes allowed for this session
+        self._session_rows: list[dict] = []               # the last /sessions list (numbered)
         self._last_command: dict | None = None            # context for the next Sage question
         self._selected_label: str | None = None                  # the highlighted resource, if any
         self._run_graph: RunGraph | None = None           # live graph of the running command
@@ -125,7 +126,9 @@ class SagexApp(App):
         text.append("Sage asks before it changes anything, opens a file or runs a shell command · ",
                     style="bright_black")
         text.append("/permissions", style="bold")
-        text.append(" to review what you've allowed\n", style="bright_black")
+        text.append(" to review what you've allowed · ", style="bright_black")
+        text.append("/sessions", style="bold")
+        text.append(" to reopen a conversation\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
                     style="bright_black")
         return text
@@ -193,9 +196,7 @@ class SagexApp(App):
             if not command:
                 return
             if command.lower() in ("clear", "cls"):     # UI builtin: wipe the transcript
-                log = self.query_one("#chat-log", VerticalScroll)
-                for entry in [*log.query(ChatMessage), *log.query(RunGraph), *log.query(ToolCard)]:
-                    entry.remove()
+                self._clear_transcript()
                 return
             self.add_message(command, "command")        # echo it, like a terminal does
             out = self._new_output_message()            # its output streams in below
@@ -214,11 +215,20 @@ class SagexApp(App):
             self._set_busy(True, "Thinking")
             self.ask_sage(text, context)
 
+    def _clear_transcript(self) -> None:
+        log = self.query_one("#chat-log", VerticalScroll)
+        for entry in [*log.query(ChatMessage), *log.query(RunGraph), *log.query(ToolCard)]:
+            entry.remove()
+
     def _app_command(self, words: list[str]) -> None:
-        """`/permissions` — see and revoke the changes Sage may make without asking."""
+        """`/permissions`, `/sessions` and `/new`."""
         name, args = (words[0].lower(), words[1:]) if words else ("", [])
+        if name in ("sessions", "new"):
+            self._sessions_command(name, args)
+            return
         if name != "permissions":
-            self.add_message(f"Unknown command /{name}. Available: /permissions", "notice")
+            self.add_message(f"Unknown command /{name}. Available: /permissions, /sessions, /new",
+                             "notice")
             return
         allowances = self._allowances
         usage = "Usage: /permissions · /permissions revoke <number> · /permissions revoke all"
@@ -250,6 +260,107 @@ class SagexApp(App):
             self.add_message(usage, "notice")
         self._refresh_prompt()
 
+    # --- saved conversations (/sessions, /new) ---------------------------------------
+
+    _SESSIONS_USAGE = ("Usage: /sessions · /sessions <number> to reopen · "
+                       "/sessions delete <number> · /new for a fresh conversation")
+
+    def _sessions_command(self, name: str, args: list[str]) -> None:
+        if self._busy:
+            self.add_message("Wait for the current reply or command to finish (Esc stops it).",
+                             "notice")
+            return
+        if not store.get_key():
+            self.add_message("Sign in to use Sage: run !sagex auth login", "notice")
+            return
+        if name == "new":
+            self.run_worker(self._sage.new(), group="sage")
+            self.add_message("New conversation: Sage starts fresh with your next message.", "notice")
+            return
+        if not args:
+            self._list_sessions()
+            return
+        delete = args[0].lower() == "delete"
+        pick = args[1] if delete and len(args) == 2 else (args[0] if len(args) == 1 else "")
+        if not pick.isdigit() or not 1 <= int(pick) <= len(self._session_rows):
+            hint = "Run /sessions first." if not self._session_rows else self._SESSIONS_USAGE
+            self.add_message(f"No conversation {pick or '?'}. {hint}", "notice")
+            return
+        row = self._session_rows[int(pick) - 1]
+        if delete:
+            self._delete_session(row)
+        else:
+            self._set_busy(True, "Opening")
+            self._open_session(row)
+
+    @work(thread=True)
+    def _list_sessions(self) -> None:
+        try:
+            rows = resources.list_sage_conversations(build_client())
+        except ApiError as exc:
+            message = ("Saved conversations need a newer Autosage server." if exc.status == 404
+                       else exc.message)
+            self.call_from_thread(self.add_message, message, "notice")
+            return
+        self.call_from_thread(self._show_sessions, rows)
+
+    def _show_sessions(self, rows: list[dict]) -> None:
+        self._session_rows = rows
+        if not rows:
+            self.add_message("No saved conversations yet. Sage saves each one as you go.",
+                             "cmd_output")
+            return
+        current = self._sage.conversation_id
+        lines = ["Your recent conversations with Sage (newest first):"]
+        for i, row in enumerate(rows, 1):
+            title = row["title"] if len(row["title"]) <= 60 else row["title"][:59] + "…"
+            meta = " · ".join(p for p in (row["when"], row["device"], row["workspace"],
+                                          f"{row['turns']} message{'s' if row['turns'] != 1 else ''}")
+                              if p)
+            lines.append(f"  {i}. {title}  ({meta}){'  ← this one' if row['id'] == current else ''}")
+        lines.append("Reopen: /sessions <number> · Delete: /sessions delete <number> · "
+                     "New: /new · Only your latest 100 are kept.")
+        self.add_message("\n".join(lines), "cmd_output")
+
+    @work(group="sage")
+    async def _open_session(self, row: dict) -> None:
+        try:
+            resumed = await self._sage.open(row["id"])
+        except SageError as exc:
+            self.add_message(exc.message, "notice")
+            return
+        finally:
+            self._set_busy(False)
+        self._clear_transcript()
+        transcript = resumed.get("transcript") or []
+        for turn in transcript:
+            if turn.get("prompt"):
+                self.add_message(str(turn["prompt"]), "user")
+            if turn.get("reply"):
+                self._mount_entry(ChatMessage(str(turn["reply"]), "sage"))
+            if turn.get("cancelled"):
+                self.add_message("Stopped.", "notice")
+        shown = f"the last {len(transcript)} messages" if row["turns"] > len(transcript) else "it"
+        self.add_message(f"Reopened “{resumed.get('title') or row['title']}”, showing {shown}. "
+                         "Sage remembers this conversation (its older parts as a summary).",
+                         "notice")
+        self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
+
+    @work(thread=True)
+    def _delete_session(self, row: dict) -> None:
+        try:
+            resources.delete_sage_conversation(build_client(), row["id"])
+        except ApiError as exc:
+            self.call_from_thread(self.add_message, exc.message, "notice")
+            return
+        self._session_rows = [r for r in self._session_rows if r["id"] != row["id"]]
+        current = self._sage.conversation_id == row["id"]
+        if current:
+            self.call_from_thread(lambda: self.run_worker(self._sage.new(), group="sage"))
+        tail = " Sage starts a new conversation with your next message." if current else ""
+        self.call_from_thread(self.add_message, f"Deleted “{row['title']}”.{tail} Run /sessions "
+                              "to see the list again.", "notice")
+
     @work(group="sage")
     async def ask_sage(self, text: str, context: dict | None) -> None:
         """Stream Sage's reply into the transcript (on the app's own event loop)."""
@@ -270,9 +381,12 @@ class SagexApp(App):
                     result = await self._run_sage_tool(frame)
                     await self._sage.send_tool_result(result)
                     activity.set("Thinking")
+                elif kind == "reconnected" and frame.get("resumed"):
+                    self.add_message("Reconnected — Sage picked up the conversation where you "
+                                     "left off.", role="notice")
                 elif kind == "reconnected":
                     self.add_message("Started a new conversation — Sage doesn't remember the "
-                                     "earlier one yet.", role="notice")
+                                     "earlier one.", role="notice")
                 elif kind == "notice":
                     self.add_message(frame.get("message") or "", role="notice")
                 elif kind == "done" and frame.get("cancelled"):
