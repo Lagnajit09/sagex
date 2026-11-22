@@ -74,6 +74,67 @@ def sage_usage(client: ApiClient | None = None) -> dict:
     return client.get("/sage/usage/") or {}
 
 
+# ---------------------------------------------------------------------------
+# Personal models (Autobot's BYO "LLM configs"): the same records as the web's
+# Customize panel. The account's selected model (Autobot settings
+# `default_llm_config`) is what Sage and Autobot answer with; none selected =
+# Autosage's free models. The API key is write-only — no call here reads it back.
+# ---------------------------------------------------------------------------
+
+MODEL_PROVIDERS = ("gemini", "groq", "openrouter", "anthropic", "openai",
+                   "azure_openai", "nvidia_nim", "custom")
+
+
+def list_models(client: ApiClient) -> list[dict]:
+    """Your personal models, newest change first (no keys)."""
+    return _as_list(client.get("/api/autobot/llm-configs/"))
+
+
+def selected_model_id(client: ApiClient) -> str | None:
+    """The id of the model Sage and Autobot use, or None for the free models."""
+    data = client.get("/api/autobot/settings/") or {}
+    chosen = data.get("default_llm_config") if isinstance(data, dict) else None
+    return str(chosen) if chosen else None
+
+
+def models_and_selection(client: ApiClient) -> tuple[list[dict], str | None]:
+    """Your models and the selected one's id. A selection pointing at a model
+    that no longer exists counts as none (the server falls back the same way)."""
+    items = list_models(client)
+    chosen = selected_model_id(client)
+    if chosen and not any(str(m.get("id")) == chosen for m in items):
+        chosen = None
+    return items, chosen
+
+
+def resolve_model(client: ApiClient, ref: str) -> dict:
+    hits = _match(list_models(client), ref)
+    if not hits:
+        raise ResourceNotFound("model", ref)
+    return hits[0]          # names are unique per user
+
+
+def create_model(client: ApiClient, payload: dict) -> dict:
+    return client.post("/api/autobot/llm-configs/", json=payload)
+
+
+def update_model(client: ApiClient, model_id, payload: dict) -> dict:
+    """Partial update; leave `api_key` out to keep the stored key."""
+    return client.patch(f"/api/autobot/llm-configs/{model_id}/", json=payload)
+
+
+def delete_model(client: ApiClient, model_id) -> None:
+    client.delete(f"/api/autobot/llm-configs/{model_id}/")
+
+
+def select_model(client: ApiClient, model_id: str | None) -> str | None:
+    """Make a model the one Sage and Autobot use (None: the free models).
+    Returns the selection the server stored."""
+    data = client.patch("/api/autobot/settings/", json={"default_llm_config": model_id}) or {}
+    chosen = data.get("default_llm_config") if isinstance(data, dict) else None
+    return str(chosen) if chosen else None
+
+
 def list_triggers(client: ApiClient) -> list[tuple[str, str, bool]]:
     """Return configured triggers as (workflow_name, detail, is_active).
 

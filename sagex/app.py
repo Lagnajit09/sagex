@@ -16,7 +16,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Input, Static, DirectoryTree
 
-from sagex import config, local_tools, runview, sage_tools, shell, usage
+from sagex import config, local_tools, models, runview, sage_tools, shell, usage
 from sagex.api import ApiError, build_client, resources, store
 from sagex.formatting import ACCENT, run_label, trigger_label
 from sagex.sage import SageError, SageSession, command_context
@@ -131,6 +131,8 @@ class SagexApp(App):
         text.append(" to review what you've allowed · ", style="bright_black")
         text.append("/sessions", style="bold")
         text.append(" to reopen a conversation · ", style="bright_black")
+        text.append("/model", style="bold")
+        text.append(" to pick the model it answers with · ", style="bright_black")
         text.append("/usage", style="bold")
         text.append(" for what you've used\n", style="bright_black")
         text.append("Esc stops a run · ↑/↓ history · F2 shell · F3 server/local · F5 refresh · Ctrl+Q quit",
@@ -228,10 +230,16 @@ class SagexApp(App):
             entry.remove()
 
     def _app_command(self, words: list[str]) -> None:
-        """`/permissions`, `/sessions`, `/new` and `/usage`."""
+        """`/permissions`, `/sessions`, `/new`, `/model` and `/usage`."""
         name, args = (words[0].lower(), words[1:]) if words else ("", [])
         if name in ("sessions", "new"):
             self._sessions_command(name, args)
+            return
+        if name in ("model", "models"):
+            if not store.get_key():
+                self.add_message("Sign in to choose Sage's model: run !sagex auth login", "notice")
+            else:
+                self._model_command(" ".join(args))
             return
         if name == "usage":
             if not store.get_key():
@@ -241,7 +249,7 @@ class SagexApp(App):
             return
         if name != "permissions":
             self.add_message("Unknown command /" + name + ". Available: /permissions, /sessions, "
-                             "/new, /usage", "notice")
+                             "/new, /model, /usage", "notice")
             return
         allowances = self._allowances
         usage = "Usage: /permissions · /permissions revoke <number> · /permissions revoke all"
@@ -272,6 +280,62 @@ class SagexApp(App):
         else:
             self.add_message(usage, "notice")
         self._refresh_prompt()
+
+    # --- which model Sage answers with (/model) ----------------------------------------
+
+    @work(thread=True, group="model", exclusive=True)
+    def _model_command(self, ref: str) -> None:
+        """`/model` lists your models; `/model <number|name|free>` switches.
+
+        The list is fetched fresh each time (it may have changed on the web or
+        through `sagex create model`), so numbers always match what was shown last
+        — unless it changed in between, which picking by name avoids."""
+        client = build_client()
+        try:
+            items, chosen = resources.models_and_selection(client)
+            if not ref:
+                self.call_from_thread(self._show_models, items, chosen)
+                return
+            picked = models.pick(items, ref)
+            if isinstance(picked, str):
+                self.call_from_thread(self.add_message, picked, "notice")
+                return
+            if (models.model_id(picked) if picked else None) == chosen:
+                self.call_from_thread(self.add_message,
+                                      f"Sage already answers with {models.label(picked)}.", "notice")
+                return
+            resources.select_model(client, models.model_id(picked) if picked else None)
+        except ApiError as exc:
+            self.call_from_thread(self.add_message, exc.message, "notice")
+            return
+        self.call_from_thread(self._model_selected, picked)
+
+    def _show_models(self, items: list[dict], chosen: str | None) -> None:
+        lines = ["Models Sage can answer with (● = in use):"]
+        rows = [(None, f"{models.FREE_LABEL} — {models.FREE_NOTE}"), *((m, models.label(m)) for m in items)]
+        for i, (m, text) in enumerate(rows):
+            mark = "●" if (models.model_id(m) if m else None) == chosen else " "
+            lines.append(f"  {mark} {i}. {text}")
+        lines.append("Switch: /model <number or name> · /model free. "
+                     f"{models.SHARED_NOTE}")
+        if not items:
+            lines.append("No personal models yet. Add one with your own provider key:")
+        else:
+            lines.append("Add another with your own provider key:")
+        lines.append("  sagex create model \"<name>\" --provider <provider> --model <model id> --use  "
+                     "(in a terminal: it asks for the key, hidden)")
+        lines.append("  or here: !sagex create model … --key-file <file holding the key>")
+        self.add_message("\n".join(lines), "cmd_output")
+
+    def _model_selected(self, picked: dict | None) -> None:
+        if self._today is not None:
+            self._today.select(picked)
+            self._show_usage()
+        tail = "" if picked else " Free requests count against the daily allowance."
+        self.add_message(f"Sage answers with {models.label(picked)} from your next message. "
+                         f"{models.SHARED_NOTE}{tail}", "notice")
+        if picked is None:
+            self._load_usage()           # the allowance line needs the current count
 
     # --- saved conversations (/sessions, /new) ---------------------------------------
 
@@ -477,8 +541,11 @@ class SagexApp(App):
         run = sage_tools.CommandRun(
             words, cwd=self._sage_workspace(), width=self._card_width(),
             timeout=sage_tools.CHANGE_TIMEOUT if change else sage_tools.READ_TIMEOUT)
-        return await self._stream_run(call_id, card, run, f"Running sagex {' '.join(check.path)}",
-                                      live_graph=change)
+        result = await self._stream_run(call_id, card, run, f"Running sagex {' '.join(check.path)}",
+                                        live_graph=change)
+        if change and result.get("exit_code") == 0:
+            self._after_model_command("sagex " + shlex.join(words))
+        return result
 
     async def _stream_run(self, call_id: str, card: ToolCard, run: sage_tools.CommandRun,
                           activity: str, *, live_graph: bool = False) -> dict:
@@ -797,6 +864,20 @@ class SagexApp(App):
             self._run_graph = None
         self._set_busy(False)
         self._refresh_prompt()           # the working dir may have changed
+        if code == 0:
+            self._after_model_command(command)
+
+    def _after_model_command(self, command: str) -> None:
+        """A sagex command that changed your models may have changed which one
+        Sage uses: refresh the sidebar's model line."""
+        try:
+            words = shlex.split(command, posix=os.name != "nt")
+        except ValueError:
+            return
+        if (len(words) >= 3 and words[0].lower() in ("sagex", "sagex.exe")
+                and words[1] in ("use", "create", "update", "delete", "rename")
+                and words[2] == "model" and store.get_key()):
+            self._load_usage()
 
     def action_cycle_shell(self) -> None:
         """F2: switch to the next installed shell (and remember the choice)."""

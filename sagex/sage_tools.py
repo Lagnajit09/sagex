@@ -39,8 +39,8 @@ from sagex.shell import clean_output
 
 # Commands Sage can run with sagex_read: they only look things up.
 READ_ONLY: frozenset[tuple[str, ...]] = frozenset({
-    *(("list", kind) for kind in ("workflow", "script", "run", "trigger", "key", "server", "vault")),
-    *(("show", kind) for kind in ("workflow", "script", "run", "trigger", "key", "server", "vault")),
+    *(("list", kind) for kind in ("workflow", "script", "run", "trigger", "key", "server", "vault", "model")),
+    *(("show", kind) for kind in ("workflow", "script", "run", "trigger", "key", "server", "vault", "model")),
     ("render", "workflow"),
     ("trigger", "invoke"),
     ("workspace", "show"),
@@ -54,7 +54,9 @@ NEVER: frozenset[tuple[str, ...]] = frozenset({
     ("create", "key"),
     ("update", "key"),
     ("copy", "key"),
-    ("trigger", "create"),          # an HTTP trigger prints its secret once
+    ("create", "model"),            # take an LLM provider API key
+    ("update", "model"),
+    ("trigger", "create"),         # an HTTP trigger prints its secret once
     ("trigger", "regenerate"),      # prints the new secret
     ("trigger", "poll"),            # authenticates with the trigger's secret
 })
@@ -193,6 +195,8 @@ def warning(check: Check) -> str | None:
     """What the approval card must say about a change, whatever Sage said."""
     if check.path == ("delete", "vault"):
         return "Deletes the vault and every server and credential in it. Can't be undone."
+    if check.path == ("use", "model"):
+        return "Changes the model Sage answers with — and Autobot on the web, too (account-wide)."
     if check.always_ask:
         return "Deletes it permanently. Can't be undone."
     return None
@@ -306,7 +310,7 @@ def _signature(cmd, *, listed_only: bool = True) -> str:
     return " ".join(parts)
 
 
-_RESOURCES = frozenset({"workflow", "script", "run", "trigger", "key", "server", "vault"})
+_RESOURCES = frozenset({"workflow", "script", "run", "trigger", "key", "server", "vault", "model"})
 
 
 def _index_lines(paths: list[tuple[tuple[str, ...], object]]) -> list[str]:

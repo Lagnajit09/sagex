@@ -68,11 +68,14 @@ app.add_typer(push_app, name="push")
 new_app = typer.Typer(help="Scaffold new local resource files ready to edit and push.")
 app.add_typer(new_app, name="new")
 
-create_app = typer.Typer(help="Create server-side resources (vaults, servers, keys).")
+create_app = typer.Typer(help="Create server-side resources (vaults, servers, keys, models).")
 app.add_typer(create_app, name="create")
 
-update_app = typer.Typer(help="Update server-side resources (vaults, servers, keys).")
+update_app = typer.Typer(help="Update server-side resources (vaults, servers, keys, models).")
 app.add_typer(update_app, name="update")
+
+use_app = typer.Typer(help="Choose which model Sage (and Autobot on the web) answers with.")
+app.add_typer(use_app, name="use")
 
 delete_app = typer.Typer(help="Delete server-side resources (asks for confirmation).")
 app.add_typer(delete_app, name="delete")
@@ -80,7 +83,7 @@ app.add_typer(delete_app, name="delete")
 trigger_app = typer.Typer(help="Configure workflow triggers (HTTP webhooks and schedules).")
 app.add_typer(trigger_app, name="trigger")
 
-rename_app = typer.Typer(help="Rename a resource (workflow, script, vault, server, key).")
+rename_app = typer.Typer(help="Rename a resource (workflow, script, vault, server, key, model).")
 app.add_typer(rename_app, name="rename")
 
 run_app = typer.Typer(help="Run a script or workflow now and watch it live.")
@@ -1958,6 +1961,290 @@ def rename_key_cmd(
         typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
     typer.echo(f"✓ Renamed key to '{updated.get('name') or new_name}' (id {cred.get('id')})")
+
+
+# ---------------------------------------------------------------------------
+# Personal models (BYO): the same records as the web's Customize panel. The API
+# key is typed at a hidden prompt or read from a file you choose — never a flag,
+# never written to disk, never read back (the server has no way to return it here).
+# ---------------------------------------------------------------------------
+
+_PROVIDER_ALIASES = {"azure": "azure_openai", "nvidia": "nvidia_nim", "google": "gemini",
+                     "claude": "anthropic"}
+_PROVIDER_CHOICES = " | ".join(resources.MODEL_PROVIDERS)
+
+
+def _normalize_provider(value: str) -> str:
+    p = value.strip().lower().replace("-", "_")
+    p = _PROVIDER_ALIASES.get(p, p)
+    if p not in resources.MODEL_PROVIDERS:
+        typer.echo(f"✗ --provider must be one of: {_PROVIDER_CHOICES}.")
+        raise typer.Exit(code=1)
+    return p
+
+
+def _check_base_url(url: str | None) -> None:
+    if url and not url.lower().startswith(("https://", "http://")):
+        typer.echo("✗ --base-url must start with https:// (or http:// for a local proxy).")
+        raise typer.Exit(code=1)
+
+
+def _model_api_key(key_file: str | None) -> str:
+    """The provider API key: from --key-file, else a hidden prompt."""
+    if key_file:
+        key = _read_secret_file(key_file).strip()
+        if "\n" in key:
+            typer.echo("✗ The key file should hold only the API key, on one line.")
+            raise typer.Exit(code=1)
+    elif sys.stdin.isatty() and sys.stderr.isatty():
+        key = typer.prompt("API key (hidden)", hide_input=True, err=True).strip()
+    else:
+        typer.echo("✗ The API key is typed at a hidden prompt — run this in a terminal, or pass --key-file <path>.")
+        raise typer.Exit(code=1)
+    if not key:
+        typer.echo("✗ The API key is empty.")
+        raise typer.Exit(code=1)
+    return key
+
+
+def _models_or_exit(client) -> tuple[list[dict], str | None]:
+    try:
+        return resources.models_and_selection(client)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+
+def _find_model(items: list[dict], ref: str) -> dict:
+    from sagex import models
+    hit = next((m for m in items if models.model_id(m) == ref), None) or next(
+        (m for m in items if str(m.get("name") or "").lower() == ref.strip().lower()), None)
+    if hit is None:
+        typer.echo(f"No model matching '{ref}'. See:  sagex list model")
+        raise typer.Exit(code=1)
+    return hit
+
+
+def _name_taken(items: list[dict], name: str, except_id: str | None = None) -> dict | None:
+    name_l = name.strip().lower()
+    return next((m for m in items if str(m.get("name") or "").lower() == name_l
+                 and str(m.get("id")) != str(except_id)), None)
+
+
+@list_app.command("model")
+def list_model_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+) -> None:
+    """List your personal models (API keys never shown) and which one Sage uses."""
+    client = _client_or_exit()
+    items, selected = _models_or_exit(client)
+    if json_out:
+        render.print_json(render.slim_items(
+            [{**m, "in_use": str(m.get("id")) == selected} for m in items], "model"))
+    else:
+        render.list_models(items, selected)
+
+
+@show_app.command("model")
+def show_model_cmd(
+    ref: str = typer.Argument(..., help="Model name or id."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw record as JSON."),
+) -> None:
+    """Show one of your personal models. Its API key is never shown."""
+    client = _client_or_exit()
+    items, selected = _models_or_exit(client)
+    m = _find_model(items, ref)
+    render.print_json({**m, "in_use": str(m.get("id")) == selected}) if json_out else render.model(m, selected)
+
+
+@create_app.command("model")
+def create_model_cmd(
+    name: str = typer.Argument(..., help="A name for this model (unique among yours), e.g. \"My Claude\"."),
+    provider: str = typer.Option(..., "--provider", "-p", help=f"Provider: {_PROVIDER_CHOICES}."),
+    model_name: str = typer.Option(..., "--model", "-m", help="Model id, e.g. anthropic/claude-sonnet-4-5, groq/llama-3.3-70b-versatile, gpt-4o-mini (Azure: the deployment name)."),
+    base_url: str = typer.Option(None, "--base-url", help="Endpoint for a proxy, self-hosted or custom provider (leave out for the provider's own)."),
+    api_version: str = typer.Option(None, "--api-version", help="API version (required for Azure OpenAI), e.g. 2024-08-01-preview."),
+    key_file: str = typer.Option(None, "--key-file", help="Read the API key from this file instead of a hidden prompt."),
+    use: bool = typer.Option(False, "--use", help="Make it the model Sage (and Autobot on the web) answers with."),
+) -> None:
+    """Add a personal model (your own provider API key). The key is typed at a hidden prompt or read from --key-file — never a flag — and stored encrypted on Autosage; it's never shown again."""
+    from sagex import models
+
+    provider = _normalize_provider(provider)
+    if not model_name.strip():
+        typer.echo(f"✗ --model is empty. For {provider}, e.g. {models.MODEL_HINTS[provider]}")
+        raise typer.Exit(code=1)
+    if provider == "azure_openai" and not (api_version or "").strip():
+        typer.echo("✗ Azure OpenAI needs --api-version (e.g. 2024-08-01-preview).")
+        raise typer.Exit(code=1)
+    _check_base_url(base_url)
+
+    client = _client_or_exit()
+    items, _ = _models_or_exit(client)
+    clash = _name_taken(items, name)
+    if clash:                                   # checked BEFORE asking for the key
+        typer.echo(f"✗ You already have a model named '{clash.get('name')}'.")
+        typer.echo(f"  To change it, run:  sagex update model \"{clash.get('name')}\" …")
+        raise typer.Exit(code=1)
+
+    payload = {"name": name.strip(), "provider": provider, "model_name": model_name.strip(),
+               "api_key": _model_api_key(key_file)}
+    if base_url:
+        payload["base_url"] = base_url.strip()
+    if api_version:
+        payload["api_version"] = api_version.strip()
+    try:
+        created = resources.create_model(client, payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    finally:
+        payload.pop("api_key", None)
+    typer.echo(f"✓ Added model {models.label(created)}")
+    if use:
+        _select_or_exit(client, created)
+    else:
+        render.note(f"  Use it with:  sagex use model \"{created.get('name')}\"")
+
+
+@update_app.command("model")
+def update_model_cmd(
+    ref: str = typer.Argument(..., help="Model name or id."),
+    name: str = typer.Option(None, "--name", help="New name."),
+    provider: str = typer.Option(None, "--provider", "-p", help=f"Provider: {_PROVIDER_CHOICES}."),
+    model_name: str = typer.Option(None, "--model", "-m", help="New model id."),
+    base_url: str = typer.Option(None, "--base-url", help="New endpoint (\"\" to use the provider's own)."),
+    api_version: str = typer.Option(None, "--api-version", help="New API version (\"\" to clear)."),
+    new_key: bool = typer.Option(False, "--new-key", help="Replace the API key (typed at a hidden prompt)."),
+    key_file: str = typer.Option(None, "--key-file", help="Replace the API key with the one in this file."),
+) -> None:
+    """Change one of your personal models. The stored API key is kept unless you pass --new-key or --key-file."""
+    from sagex import models
+
+    fields = (name, provider, model_name, base_url, api_version)
+    if all(v is None for v in fields) and not (new_key or key_file):
+        typer.echo("Nothing to update — pass --name, --provider, --model, --base-url, --api-version, "
+                   "--new-key or --key-file.")
+        raise typer.Exit(code=1)
+    payload: dict = {}
+    if provider is not None:
+        payload["provider"] = _normalize_provider(provider)
+    if model_name is not None:
+        if not model_name.strip():
+            typer.echo("✗ --model can't be empty.")
+            raise typer.Exit(code=1)
+        payload["model_name"] = model_name.strip()
+    if base_url is not None:
+        _check_base_url(base_url)
+        payload["base_url"] = base_url.strip()
+    if api_version is not None:
+        payload["api_version"] = api_version.strip()
+
+    client = _client_or_exit()
+    items, _ = _models_or_exit(client)
+    m = _find_model(items, ref)
+    if name is not None:
+        if not name.strip():
+            typer.echo("✗ --name can't be empty.")
+            raise typer.Exit(code=1)
+        if _name_taken(items, name, except_id=models.model_id(m)):
+            typer.echo(f"✗ You already have another model named '{name}'.")
+            raise typer.Exit(code=1)
+        payload["name"] = name.strip()
+    if payload.get("provider", m.get("provider")) == "azure_openai" and not payload.get(
+            "api_version", m.get("api_version")):
+        typer.echo("✗ Azure OpenAI needs --api-version (e.g. 2024-08-01-preview).")
+        raise typer.Exit(code=1)
+    if new_key or key_file:
+        payload["api_key"] = _model_api_key(key_file)
+    try:
+        updated = resources.update_model(client, models.model_id(m), payload)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    finally:
+        payload.pop("api_key", None)
+    typer.echo(f"✓ Updated model {models.label(updated)}" + (" (new API key saved)" if new_key or key_file else ""))
+
+
+@rename_app.command("model")
+def rename_model_cmd(
+    ref: str = typer.Argument(..., help="Model name or id."),
+    new_name: str = typer.Argument(..., help="New name (unique among your models)."),
+) -> None:
+    """Rename one of your personal models."""
+    from sagex import models
+
+    client = _client_or_exit()
+    items, _ = _models_or_exit(client)
+    m = _find_model(items, ref)
+    if not new_name.strip() or _name_taken(items, new_name, except_id=models.model_id(m)):
+        typer.echo(f"✗ You already have another model named '{new_name}'." if new_name.strip()
+                   else "✗ The new name is empty.")
+        raise typer.Exit(code=1)
+    try:
+        updated = resources.update_model(client, models.model_id(m), {"name": new_name.strip()})
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Renamed model to '{updated.get('name') or new_name}'")
+
+
+@delete_app.command("model")
+def delete_model_cmd(
+    ref: str = typer.Argument(..., help="Model name or id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete one of your personal models (and its stored API key)."""
+    from sagex import models
+
+    client = _client_or_exit()
+    items, selected = _models_or_exit(client)
+    m = _find_model(items, ref)
+    in_use = models.model_id(m) == selected
+    if not yes:
+        typer.echo(f"About to delete model {models.label(m)} and its stored API key. This cannot be undone.")
+        if in_use:
+            typer.echo(f"  It's the model in use: Sage and Autobot will switch to {models.FREE_LABEL}.")
+        if not typer.confirm("  Delete it?"):
+            typer.echo("Aborted — nothing deleted.")
+            raise typer.Exit(code=1)
+    try:
+        resources.delete_model(client, models.model_id(m))
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Deleted model '{m.get('name')}'"
+               + (f" — Sage and Autobot now use {models.FREE_LABEL}" if in_use else ""))
+
+
+def _select_or_exit(client, m: dict | None) -> None:
+    from sagex import models
+
+    try:
+        resources.select_model(client, models.model_id(m) if m else None)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Sage now answers with {models.label(m)}")
+    render.note(f"  {models.SHARED_NOTE}" + ("" if m else " Free requests count against the daily allowance."))
+
+
+@use_app.command("model")
+def use_model_cmd(
+    ref: str = typer.Argument(None, help="Model name or id (see `sagex list model`)."),
+    free: bool = typer.Option(False, "--free", help="Use Autosage's free models instead of a personal model."),
+) -> None:
+    """Choose the model Sage answers with (a personal model, or --free). Account-wide: Autobot on the web uses the same choice. Takes effect from the next reply."""
+    if bool(ref) == free:
+        typer.echo("Pass a model name (see `sagex list model`) or --free.")
+        raise typer.Exit(code=1)
+    client = _client_or_exit()
+    m = None
+    if ref:
+        items, _ = _models_or_exit(client)
+        m = _find_model(items, ref)
+    _select_or_exit(client, m)
 
 
 @push_app.command("workflow")

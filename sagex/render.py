@@ -887,6 +887,7 @@ _SLIM: dict[str, list[str]] = {
                    "cron_expression", "timezone", "trigger_url", "secret_last4"],
     "credential": ["id", "name", "credential_type", "vault_name", "created_at", "modified_at"],
     "server":     ["id", "name", "host", "port", "connection_method", "vault_name", "created_at", "modified_at"],
+    "model":      ["id", "name", "provider", "model_name", "base_url", "api_version", "in_use", "modified_at"],
 }
 
 
@@ -1052,3 +1053,43 @@ def list_vaults(items: list[dict]) -> None:
             str(len(svrs)) if isinstance(svrs, list) else "—",
         )
     console.print(table)
+
+
+# --- personal models (BYO) -------------------------------------------------
+
+def list_models(items: list[dict], selected: str | None) -> None:
+    """Your models with the one in use marked, plus the free models row."""
+    from sagex import models
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("", no_wrap=True)
+    table.add_column("name")
+    table.add_column("model")
+    table.add_column("id", style="cyan", no_wrap=True)
+    table.add_row("●" if selected is None else "", models.FREE_LABEL,
+                  Text(models.FREE_NOTE, style="bright_black"), "")
+    for m in items:
+        table.add_row("●" if models.model_id(m) == selected else "", m.get("name") or "(unnamed)",
+                      models.wire_name(m), models.model_id(m))
+    console.print(table)
+    note(f"● = what Sage uses. {models.SHARED_NOTE} Switch with: sagex use model <name> (or --free)")
+
+
+def model(m: dict, selected: str | None) -> None:
+    """Show one personal model. Its API key is never returned by the server."""
+    from sagex import models
+
+    header = Text()
+    header.append(_kv("id", m.get("id")));                          header.append("\n")
+    header.append(_kv("provider", m.get("provider")));              header.append("\n")
+    header.append(_kv("model", models.wire_name(m)));               header.append("\n")
+    if m.get("base_url"):
+        header.append(_kv("base url", m.get("base_url")));          header.append("\n")
+    if m.get("api_version"):
+        header.append(_kv("api version", m.get("api_version")));    header.append("\n")
+    header.append(_kv("in use", "yes — Sage and Autobot answer with it"
+                      if models.model_id(m) == selected else "no"));  header.append("\n")
+    header.append(_kv("modified", m.get("modified_at")))
+    console.print(Panel(header, title=m.get("name") or "(model)", title_align="left"))
+    note("The API key is stored encrypted and never shown. Replace it with: "
+         f"sagex update model \"{m.get('name')}\" --new-key")

@@ -186,17 +186,67 @@ def test_usage_block_updates_from_replies_and_usage_prints_details(monkeypatch, 
             block = app.query_one("#sage-usage")
             assert block.display
             text = str(block.render())
-            assert "4 replies · 48.2k tokens" in text and "4 of 30 left" in text
+            assert "4 requests · 48.2k tokens" in text and "4 of 30 left" in text
             await pilot.press(*"hi", "enter")
             await _settle(pilot, app)
             text = str(block.render())
-            assert "5 replies · 50k tokens" in text and "3 of 30 left" in text
+            assert "5 requests · 50k tokens" in text and "3 of 30 left" in text
             assert len(calls) == 1                                  # updated without a fetch
             await pilot.press(*"/usage", "enter")
             await pilot.pause(0.4)
             report = app.query("ChatMessage.cmd_output").last().body
             assert "Last 7 days" in report and "groq/llama (9)" in report and "laptop (9)" in report
             assert "4 of 30 left" in report          # /usage refetched (the canned server data)
+
+    asyncio.run(scenario())
+
+
+MODELS = [{"id": "m1", "name": "My Claude", "provider": "anthropic", "model_name": "claude-sonnet-4-5"},
+          {"id": "m2", "name": "Groq fast", "provider": "groq", "model_name": "groq/llama-3.3-70b-versatile"}]
+
+
+def test_model_lists_switches_and_updates_the_sidebar(monkeypatch, tmp_path):
+    from sagex.api import resources
+    _isolate(monkeypatch, tmp_path, "sgx_test", usage=USAGE)
+    monkeypatch.setattr(SagexApp, "_start_loaders", lambda self: None)
+    state = {"chosen": None}
+    selected = []
+    monkeypatch.setattr(resources, "models_and_selection", lambda client: (MODELS, state["chosen"]))
+
+    def select(client, model_id):
+        selected.append(model_id)
+        state["chosen"] = model_id
+        return model_id
+    monkeypatch.setattr(resources, "select_model", select)
+
+    async def scenario():
+        app = SagexApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            block = app.query_one("#sage-usage")
+            assert "Model Autosage free models" in str(block.render())
+            await pilot.press(*"/model", "enter")
+            await pilot.pause(0.3)
+            listing = app.query("ChatMessage.cmd_output").last().body
+            assert "● 0. Autosage free models" in listing
+            assert "  1. My Claude · anthropic/claude-sonnet-4-5" in listing
+            assert "2. Groq fast · groq/llama-3.3-70b-versatile" in listing     # no doubled provider
+            assert "sagex create model" in listing and "--key-file" in listing
+            await pilot.press(*"/model my claude", "enter")
+            await pilot.pause(0.3)
+            assert selected == ["m1"]
+            assert "Sage answers with My Claude" in app.query("ChatMessage.notice").last().body
+            assert "Model My Claude · no daily cap" in str(block.render())
+            await pilot.press(*"/model 1", "enter")
+            await pilot.pause(0.3)
+            assert selected == ["m1"] and "already" in app.query("ChatMessage.notice").last().body
+            await pilot.press(*"/model 7", "enter")
+            await pilot.pause(0.3)
+            assert "No model 7" in app.query("ChatMessage.notice").last().body
+            await pilot.press(*"/model free", "enter")
+            await pilot.pause(0.4)
+            assert selected == ["m1", None]
+            assert "Model Autosage free models" in str(block.render())
 
     asyncio.run(scenario())
 
