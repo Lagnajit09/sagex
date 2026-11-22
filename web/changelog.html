@@ -194,8 +194,20 @@
     <div class="container docs" style="grid-template-columns: minmax(0, 1fr)">
       <div class="log prose" style="max-width: none">
 
+        <section class="log-entry" id="v2.0.1">
+          <div class="meta"><span class="ver">v2.0.1</span><time datetime="2026-11-22">22 Nov 2026</time><span class="release"><span class="state live">live</span></span></div>
+          <div>
+            <h2>Settings no longer pin the server</h2>
+            <h3>Fixed</h3>
+            <ul>
+              <li>Saving a setting (your shell, your workspace) also saved the Autosage server address, which then overrode the address in every later install, so sagex could keep talking to an old or local server after an upgrade. Only settings you changed are saved now. <code>sagex auth login</code> and <code>auth status</code> say which server you're using whenever it isn't the built-in one.</li>
+            </ul>
+            <p><a href="https://github.com/Lagnajit09/sagex/releases/tag/v2.0.1">Release on GitHub</a> · <a href="https://pypi.org/project/sagex-cli/2.0.1/">sagex-cli 2.0.1 on PyPI</a></p>
+          </div>
+        </section>
+
         <section class="log-entry" id="v2.0.0">
-          <div class="meta"><span class="ver">v2.0.0</span><time datetime="2026-11-22">22 Nov 2026</time><span class="release"><span class="state live">live</span></span></div>
+          <div class="meta"><span class="ver">v2.0.0</span><time datetime="2026-11-22">22 Nov 2026</time><span class="release"><span class="state">shipped</span></span></div>
           <div>
             <h2>Meet Sage</h2>
             <p>Sage is your Autosage assistant in the terminal app. Type a question without <code>!</code> and Sage answers, looks things up, and with your approval changes things for you: it runs sagex commands, writes and edits files in your workspace and runs shell commands. Conversations are saved, you can bring your own model, and you can see what you've used. See <a href="guide.html#sage">Ask Sage</a>.</p>
@@ -389,7 +401,7 @@
       </div>
       <div class="footer-bottom">
         <span>© 2026 SageCode · MIT licensed</span
-        ><span>sagex-cli 2.0.0</span>
+        ><span>sagex-cli 2.0.1</span>
       </div>
     </div>
   </footer>

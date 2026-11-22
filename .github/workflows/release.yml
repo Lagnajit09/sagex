@@ -1,7 +1,12 @@
 # Publishes a release when a version tag is pushed — and only then (no path filter:
 # it never runs for ordinary pushes to main):
 #
-#   git tag v1.1.0 && git push origin v1.1.0
+#   git tag v2.0.1 && git push origin v2.0.1
+#
+# Push the tag only after the release commit is in it (tag the commit you mean to
+# ship), and don't create the GitHub release by hand: this workflow builds the
+# package once, publishes that build to PyPI, then attaches the same files to the
+# release. A version can only be uploaded to PyPI once.
 #
 # PyPI upload uses Trusted Publishing (OIDC) — no API token is stored in GitHub.
 # One-time setup on pypi.org: add a trusted publisher for project "sagex-cli",
@@ -139,4 +144,11 @@ jobs:
             echo "uv tool install sagex-cli==${VERSION}   # or: pipx install sagex-cli==${VERSION}"
             echo '```'
           } >> notes.md
-          gh release create "$GITHUB_REF_NAME" dist/* --title "sagex ${VERSION}" --notes-file notes.md
+          # A release made by hand for this tag (or a re-run) is updated instead of
+          # failing the job: its files are replaced with exactly what went to PyPI.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "sagex ${VERSION}" --notes-file notes.md
+          fi

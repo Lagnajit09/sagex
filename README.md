@@ -32,7 +32,7 @@ curl -LsSf https://raw.githubusercontent.com/Lagnajit09/sagex/main/scripts/insta
 irm https://raw.githubusercontent.com/Lagnajit09/sagex/main/scripts/install.ps1 | iex
 ```
 
-The installer uses [uv](https://docs.astral.sh/uv/) to install sagex as an isolated tool, and fetches Python 3.11+ for you if needed. Set `SAGEX_VERSION=2.0.0` before running it to pin a version.
+The installer uses [uv](https://docs.astral.sh/uv/) to install sagex as an isolated tool, and fetches Python 3.11+ for you if needed. Set `SAGEX_VERSION=2.0.1` before running it to pin a version.
 
 **Already have a Python tool manager?** Any of these works (Python 3.11 or newer):
 

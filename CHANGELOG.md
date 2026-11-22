@@ -2,6 +2,12 @@
 
 All notable changes to sagex are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-11-22
+
+### Fixed
+
+- Saving a setting (your shell, your workspace) also saved the Autosage server address, which then overrode the address in every later install, so sagex could keep talking to an old or local server after an upgrade. Only settings you changed are saved now; a saved address that matches the built-in one is dropped the next time settings are saved. `auth login` and `auth status` say which server you're using whenever it isn't the built-in one.
+
 ## [2.0.0] - 2026-11-22
 
 **Meet Sage**, your Autosage assistant in the terminal app. Type a question without `!` and Sage answers, looks things up, and with your approval changes things for you: it runs sagex commands, writes and edits files in your workspace and runs shell commands. Conversations are saved, you can bring your own model, and you can see what you've used.
@@ -52,8 +58,6 @@ All notable changes to sagex are recorded here. Versions follow [Semantic Versio
 
 - `push script <name>` could upload the wrong file: a same-named file in the current folder (such as a leftover `sagex new script` template) won over the one in `<workspace>/scripts/`. Push now looks only in the workspace, lists both files if `<workspace>/x` and `<workspace>/scripts/x` differ, and always prints which file it used.
 - "No value for 'NAME'" now says it's the script's `{{NAME}}` input with no default.
-- Saving a setting (your shell, your workspace) also saved the Autosage server address, which then overrode the address in every later install. Only settings you changed are saved now, and `auth login` and `auth status` say which server you're using whenever it isn't the built-in one.
-
 Sage uses your selected personal model when you've set one; otherwise it uses Autosage's free models and the daily free allowance shared with Autobot on the web.
 
 ## [1.1.0] - 2026-11-01
@@ -109,6 +113,7 @@ The first public release: everything the Autosage web app does, from your termin
 
 - `SAGEX_API_KEY` (use a key without the keychain, e.g. in CI), `SAGEX_API_URL`, `SAGEX_DEBUG`.
 
+[2.0.1]: https://github.com/Lagnajit09/sagex/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Lagnajit09/sagex/releases/tag/v2.0.0
 [1.1.0]: https://github.com/Lagnajit09/sagex/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Lagnajit09/sagex/releases/tag/v1.0.0
