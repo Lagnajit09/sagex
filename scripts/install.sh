@@ -8,7 +8,7 @@
 # none is available, so this works on a machine with no Python at all.
 #
 # Environment:
-#   SAGEX_VERSION   install a specific version (e.g. 1.1.0) instead of the latest
+#   SAGEX_VERSION   install a specific version (e.g. 2.0.0) instead of the latest
 set -eu
 
 PACKAGE="sagex-cli"

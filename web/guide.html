@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guide · SageCode</title>
-  <meta name="description" content="How SageCode works, and recipes for running scripts, building workflows as files, webhooks, schedules, CI pipelines and the vault.">
+  <meta name="description" content="How SageCode works, recipes for running scripts, building workflows as files, webhooks, schedules, CI pipelines and the vault, and how to work with Sage.">
   <meta property="og:type" content="article">
   <meta property="og:title" content="The SageCode guide">
-  <meta property="og:description" content="Concepts and recipes: scripts, workflows as files, webhooks, schedules, CI and the vault.">
+  <meta property="og:description" content="Concepts and recipes: scripts, workflows as files, webhooks, schedules, CI, the vault and Sage.">
   <meta property="og:url" content="https://sagecode.web.app/guide.html">
   <meta property="og:image" content="https://sagecode.web.app/assets/img/og-cover.png">
   <meta name="twitter:card" content="summary_large_image">
@@ -42,7 +42,7 @@
           width="32"
           height="28"
         /><span class="wordmark">Sage<b>Code</b></span
-        ><small>v1.1</small></a
+        ><small>v2.0</small></a
       >
       <nav class="nav" aria-label="Main">
         <a href="index.html#features">Features</a>
@@ -186,7 +186,7 @@
       <div class="container" style="position: relative">
         <div class="eyebrow"><b>02</b> Guide</div>
         <h1>Working with SageCode</h1>
-        <p>The few ideas every command shares, then recipes for the jobs you'll do most: running scripts, building workflows, webhooks, schedules and CI.</p>
+        <p>The few ideas every command shares, recipes for the jobs you'll do most (running scripts, building workflows, webhooks, schedules and CI), and how to work with Sage.</p>
       </div>
     </section>
 
@@ -209,6 +209,11 @@
           <li><a href="#vault">Manage the vault</a></li>
           <li><a href="#runs">Look into past runs</a></li>
           <li><a href="#app">The terminal app</a></li>
+        </ul>
+        <h4 style="margin-top: 28px">Sage</h4>
+        <ul>
+          <li><a href="#sage">Ask Sage</a></li>
+          <li><a href="#own-model">Use your own model</a></li>
         </ul>
       </aside>
 
@@ -241,7 +246,7 @@
               <tr><td><code>runs/</code></td><td>Run metadata and logs, from <code>copy run</code></td></tr>
             </tbody>
           </table>
-          <p>Commands that read a local file accept a path, or just a name inside the matching folder: <code>sagex push script deploy</code> finds <code>scripts/deploy.sh</code>.</p>
+          <p>Commands that read a local file accept a path, or just a name inside the matching folder: <code>sagex push script deploy</code> finds <code>scripts/deploy.sh</code>. Relative paths always start from the workspace, never the folder you're in, so it doesn't matter where you run a command. Once you've set a workspace, the terminal app opens there too.</p>
         </section>
 
         <section id="output">
@@ -361,8 +366,50 @@
             <li><kbd>F3</kbd> switches the left panel between your server resources and your local workspace, where you can also change the workspace folder.</li>
             <li><kbd>F2</kbd> switches the shell your commands run in. On Windows it cycles PowerShell, cmd and WSL; elsewhere bash and sh.</li>
             <li><kbd>Esc</kbd> stops the running command, <kbd>↑</kbd> <kbd>↓</kbd> recall earlier ones, <kbd>F5</kbd> refreshes and <kbd>Ctrl</kbd> <kbd>Q</kbd> quits.</li>
+            <li>Anything you type without <code>!</code> goes to <a href="#sage">Sage</a>.</li>
           </ul>
-          <p>Chatting with Autobot from the terminal arrives in SageCode v2. Until then, Autobot is in the <a href="https://autosagex.web.app/ai/autobot">web app</a>.</p>
+        </section>
+
+        <section id="sage">
+          <h2>Ask Sage</h2>
+          <p>Sage is your Autosage assistant, built into the terminal app. Type a question without <code>!</code> and the answer streams into the transcript. <kbd>Esc</kbd> stops it.</p>
+          <div class="term">
+            <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">sagex · Sage</span></div>
+            <div class="term-body"><span class="l"><span class="t-brand">you</span> why did the last Deploy run fail?</span><span class="l"><span class="t-brand">you</span> write a script that checks disk space and alerts above 90%</span><span class="l"><span class="t-brand">you</span> rerun Nightly Backup with RETENTION=14</span></div>
+          </div>
+          <ul>
+            <li><strong>Ask about what you just ran.</strong> Your next question carries the end of the last <code>!</code> command's output (obvious secrets masked), so "why did that fail?" just works.</li>
+            <li><strong>It looks things up itself.</strong> Sage runs read-only commands like <code>list</code>, <code>show</code> and <code>render</code>, and reads any command's help. Each call shows as a card with the exact command and its output; click a finished card to expand it.</li>
+            <li><strong>It asks before changing anything.</strong> Runs, creates, updates, deletes and pushes show as an approval card: a one-line description and the exact command. Press <kbd>y</kbd> to run it once, <kbd>a</kbd> to allow that command on that resource for the rest of the session, or <kbd>n</kbd> to decline. Deletes always ask.</li>
+            <li><strong>Files and shell, with your approval.</strong> Sage reads, writes and edits files in your workspace (it shows the new file or a diff first) and runs shell commands in your current shell. It never touches files outside the workspace or ones that usually hold secrets, like <code>.env</code>, keys or <code>.ssh</code>.</li>
+          </ul>
+          <table>
+            <thead><tr><th>Type</th><th>To</th></tr></thead>
+            <tbody>
+              <tr><td><code>/permissions</code></td><td>See what you've allowed for this session; <code>/permissions revoke &lt;n&gt;</code> or <code>revoke all</code> takes it back</td></tr>
+              <tr><td><code>/sessions</code></td><td>List your saved conversations; <code>/sessions &lt;n&gt;</code> reopens one, <code>/sessions delete &lt;n&gt;</code> deletes it</td></tr>
+              <tr><td><code>/new</code></td><td>Start a fresh conversation</td></tr>
+              <tr><td><code>/model</code></td><td>List your models and switch: <code>/model &lt;n or name&gt;</code>, or <code>/model free</code></td></tr>
+              <tr><td><code>/usage</code></td><td>Requests and tokens today, over 7 days and all time, with models and devices</td></tr>
+            </tbody>
+          </table>
+          <p>Conversations are saved as you go, and your latest 100 are kept. Long tool output and file contents are trimmed before saving, so your files' contents aren't stored. The "Sage Today" block at the bottom of the left panel shows today's requests and tokens, the model in use and the free requests left.</p>
+          <div class="callout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg><p>Sage can never sign in, create or change vault keys or model keys, read a secret, or use <code>--reveal</code>. It can't type into prompts either: a run that needs a password typed at a hidden prompt is handed back to you to run with <code>!</code>.</p></div>
+        </section>
+
+        <section id="own-model">
+          <h2>Use your own model</h2>
+          <p>Sage answers with Autosage's free models, which share a daily allowance with Autobot on the web. To use a model with your own provider API key instead, add it and select it:</p>
+          <div class="term">
+            <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
+            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex create model "My Claude" --provider anthropic --model claude-sonnet-4-5 --use</span><span class="l">API key (hidden):</span><span class="l"><span class="t-ok">✓</span> Added model My Claude · anthropic/claude-sonnet-4-5</span><span class="l"><span class="t-ok">✓</span> Sage now answers with My Claude · anthropic/claude-sonnet-4-5</span></div>
+          </div>
+          <ul>
+            <li>Providers: <code>gemini</code>, <code>groq</code>, <code>openrouter</code>, <code>anthropic</code>, <code>openai</code>, <code>azure_openai</code> (add <code>--api-version</code>), <code>nvidia_nim</code> and <code>custom</code> (any LiteLLM-compatible endpoint, with <code>--base-url</code>).</li>
+            <li>The API key is typed at a hidden prompt, or read from a file with <code>--key-file</code>. Never as a flag. It's stored encrypted on Autosage and never shown again. Inside the terminal app, use <code>--key-file</code>, since <code>!</code> commands can't show a hidden prompt.</li>
+            <li><code>sagex use model &lt;name&gt;</code> switches, and <code>sagex use model --free</code> goes back to the free models. <code>list</code>, <code>show</code>, <code>update</code> (<code>--new-key</code> replaces the key), <code>rename</code> and <code>delete model</code> manage them.</li>
+            <li>These are the same models as Autobot's Customize panel on the web, and the choice applies to both.</li>
+          </ul>
         </section>
       </article>
     </div>
@@ -436,7 +483,7 @@
       </div>
       <div class="footer-bottom">
         <span>© 2026 SageCode · MIT licensed</span
-        ><span>sagex-cli 1.1.0</span>
+        ><span>sagex-cli 2.0.0</span>
       </div>
     </div>
   </footer>

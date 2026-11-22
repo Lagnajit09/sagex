@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Changelog · SageCode</title>
-  <meta name="description" content="What's new in each SageCode release, and what's coming next.">
+  <meta name="description" content="What's new in each SageCode release.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="SageCode changelog">
-  <meta property="og:description" content="What's new in each SageCode release, and what's coming next.">
+  <meta property="og:description" content="What's new in each SageCode release.">
   <meta property="og:url" content="https://sagecode.web.app/changelog.html">
   <meta property="og:image" content="https://sagecode.web.app/assets/img/og-cover.png">
   <meta name="twitter:card" content="summary_large_image">
@@ -42,7 +42,7 @@
           width="32"
           height="28"
         /><span class="wordmark">Sage<b>Code</b></span
-        ><small>v1.1</small></a
+        ><small>v2.0</small></a
       >
       <nav class="nav" aria-label="Main">
         <a href="index.html#features">Features</a>
@@ -194,16 +194,64 @@
     <div class="container docs" style="grid-template-columns: minmax(0, 1fr)">
       <div class="log prose" style="max-width: none">
 
-        <section class="log-entry" id="v2.0">
-          <div class="meta"><span class="ver">v2.0</span><time>Planned</time><span class="release"><span class="state">planned</span></span></div>
+        <section class="log-entry" id="v2.0.0">
+          <div class="meta"><span class="ver">v2.0.0</span><time datetime="2026-11-22">22 Nov 2026</time><span class="release"><span class="state live">live</span></span></div>
           <div>
-            <h2>Autobot in the terminal</h2>
-            <p>Chat with Autobot without leaving your terminal: generate scripts and workflows, run them, and fix what fails. Your last command's output comes along as context, so you can run <code>docker ps</code>, spot a problem and simply ask about it.</p>
+            <h2>Meet Sage</h2>
+            <p>Sage is your Autosage assistant in the terminal app. Type a question without <code>!</code> and Sage answers, looks things up, and with your approval changes things for you: it runs sagex commands, writes and edits files in your workspace and runs shell commands. Conversations are saved, you can bring your own model, and you can see what you've used. See <a href="guide.html#sage">Ask Sage</a>.</p>
+
+            <h3>Sage</h3>
+            <ul>
+              <li>Type a question (no <code>!</code>) and the reply streams into the transcript. <kbd>Esc</kbd> stops it. Your next question carries the end of the last command's output, with obvious secrets masked, so "why did that fail?" just works.</li>
+              <li>Sage looks things up by itself with read-only commands (<code>list</code>, <code>show</code>, <code>render</code>, <code>trigger invoke</code>, <code>syntax</code>, <code>workspace show</code>) and any command's help. Every call shows as a card with the exact command and its output.</li>
+              <li>Changes need your say-so: each appears as an approval card with a one-line description and the exact command. <kbd>y</kbd> runs it once, <kbd>a</kbd> allows that command on that resource for the session, <kbd>n</kbd> declines. Deletes always ask. A workflow run draws its live graph inside the card.</li>
+              <li><code>/permissions</code> lists what you've allowed and <code>/permissions revoke &lt;n&gt;</code> (or <code>revoke all</code>) takes it back.</li>
+              <li>Files in your workspace: Sage reads, writes (showing the new file or a diff first), edits just the lines that need changing, and deletes (always asks). Never outside the workspace, never files that usually hold secrets.</li>
+              <li>Shell commands in your current shell, each one approved. Sage can't type into prompts, see your SageCode key or print environment variables; risky commands always ask, with a warning.</li>
+              <li>Works with models that don't support tool calling: calls written out as text run like normal ones, behind the same approval cards.</li>
+            </ul>
+
+            <h3>Conversations</h3>
+            <ul>
+              <li>Conversations are saved. <code>/sessions</code> lists them, <code>/sessions &lt;n&gt;</code> reopens one with Sage remembering it, <code>/sessions delete &lt;n&gt;</code> deletes one, and <code>/new</code> starts fresh. A dropped connection picks the same conversation back up. Your latest 100 are kept, and your files' contents aren't stored.</li>
+              <li>Long conversations stay fast: older tool output is shortened, and Sage summarizes the older part of a long conversation and carries on from the summary.</li>
+            </ul>
+
+            <h3>Your own model</h3>
+            <ul>
+              <li><code>sagex create model "&lt;name&gt;" --provider &lt;provider&gt; --model &lt;model id&gt;</code> adds a model with your own provider API key: Gemini, Groq, OpenRouter, Anthropic, OpenAI, Azure OpenAI, NVIDIA NIM or any LiteLLM-compatible endpoint. The key is typed at a hidden prompt or read from <code>--key-file</code>, never a flag, and it's stored encrypted and never shown again.</li>
+              <li><code>sagex use model &lt;name&gt;</code> (or <code>--free</code>) picks what Sage answers with; <code>list</code>, <code>show</code>, <code>update</code>, <code>rename</code> and <code>delete model</code> manage them. In the terminal app, <code>/model</code> lists and switches. The same models and choice apply to Autobot on the web.</li>
+            </ul>
+
+            <h3>Usage</h3>
+            <ul>
+              <li>A "Sage Today" block in the left panel shows today's requests and tokens, the model in use and the free requests left, and says when your own model failed and Sage fell back to the free models.</li>
+              <li><code>/usage</code> adds the last 7 days and all time, requests per day, models and devices, with a link to the Agent Dashboard on the web, which now has a SageCode tab.</li>
+            </ul>
+
+            <h3>Changed</h3>
+            <ul>
+              <li>The workspace is the one place for local resources: every relative path a command takes starts from the workspace, never the folder you're in. The terminal app opens in the workspace, and Sage works only there.</li>
+            </ul>
+
+            <h3>Security</h3>
+            <ul>
+              <li>Sage's replies can't control your terminal: escape sequences and text-direction tricks are removed before anything is shown.</li>
+              <li>Only web and <code>mailto</code> links in replies are clickable, and a link whose text names one site but points to another shows where it really goes.</li>
+              <li>Commands that sign in, take a secret or print one (<code>auth</code>, vault keys, model keys, trigger secrets, <code>--reveal</code>) are never available to Sage.</li>
+            </ul>
+
+            <h3>Fixed</h3>
+            <ul>
+              <li><code>push script &lt;name&gt;</code> could upload a same-named file from the current folder instead of the one in your workspace. It now looks only in the workspace and prints the file it used.</li>
+              <li>"No value for 'NAME'" now says it's the script's <code>{{NAME}}</code> input with no default.</li>
+            </ul>
+            <p><a href="https://github.com/Lagnajit09/sagex/releases/tag/v2.0.0">Release on GitHub</a> · <a href="https://pypi.org/project/sagex-cli/2.0.0/">sagex-cli 2.0.0 on PyPI</a></p>
           </div>
         </section>
 
         <section class="log-entry" id="v1.1.0">
-          <div class="meta"><span class="ver">v1.1.0</span><time datetime="2026-11">Nov 2026</time><span class="release"><span class="state live">live</span></span></div>
+          <div class="meta"><span class="ver">v1.1.0</span><time datetime="2026-11">Nov 2026</time><span class="release"><span class="state">shipped</span></span></div>
           <div>
             <h2>Open to everyone, with sessions on your profile</h2>
             <p>No invite needed: sign in with your Autosage account through your browser. Every sign-in is a session you can see and revoke on your Autosage profile.</p>
@@ -341,7 +389,7 @@
       </div>
       <div class="footer-bottom">
         <span>© 2026 SageCode · MIT licensed</span
-        ><span>sagex-cli 1.1.0</span>
+        ><span>sagex-cli 2.0.0</span>
       </div>
     </div>
   </footer>

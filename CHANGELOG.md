@@ -2,51 +2,58 @@
 
 All notable changes to sagex are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.0] - 2026-11-22
+
+**Meet Sage**, your Autosage assistant in the terminal app. Type a question without `!` and Sage answers, looks things up, and with your approval changes things for you: it runs sagex commands, writes and edits files in your workspace and runs shell commands. Conversations are saved, you can bring your own model, and you can see what you've used.
 
 ### Added
 
-- **Sage**, your Autosage assistant, in the terminal app: type a question (no `!`) and the reply streams into the transcript as Markdown. Esc stops a reply.
-- Ask about the command you just ran: the next question carries its output (tail only, with obvious secrets masked; never for `--reveal` or environment dumps).
-- `SAGEX_AI_URL` to point sagex at an Autobot running on its own port (defaults to `<api url>/api/ai`).
+**Sage**
 
-- Sage looks things up for you: it can run read-only sagex commands (`list`, `show`, `render`, `trigger invoke`, `syntax`, `workspace show`) and read any command's help. Every call appears in the transcript as a card showing the exact command and its output; click a finished card to expand it. Esc stops it.
+- Type a question (no `!`) and the reply streams into the transcript as Markdown. Esc stops it. Your next question carries the output of the command you just ran (the end of it, with obvious secrets masked; never for `--reveal` or environment dumps), so "why did that fail?" just works.
+- Sage looks things up by itself: it runs read-only sagex commands (`list`, `show`, `render`, `trigger invoke`, `syntax`, `workspace show`) and reads any command's help. Every call shows in the transcript as a card with the exact command and its output; click a finished card to expand it.
+- Sage makes changes only with your say-so. Runs, creates, updates, renames, deletes, pushes and copies each appear as an approval card with a one-line description and the exact command: `y` runs it once, `a` allows that command on that resource for the rest of the session, `n` declines. Deletes always ask and carry a warning. A workflow run draws its live graph inside the card.
+- `/permissions` lists what you've allowed and `/permissions revoke <n>` (or `revoke all`) takes it back. The line under the prompt shows how many are allowed.
+- Files in your workspace: Sage reads them, writes them (showing the new file, or a diff, before you approve), edits just the lines that need changing, and deletes them (always asks). Never outside the workspace, and never files that usually hold secrets (`.env`, keys, certificates, `.git`, `.ssh`…). "Create a script that…" ends with the script written and pushed.
+- Shell commands on your machine (check a version, install a tool), in your current shell, each one approved. Sage can't type into prompts, see your SageCode key or print environment variables; commands that delete things, need admin rights or download-and-run code always ask, with a warning.
+- Sage plans before acting: it says up front when something isn't possible with its tools, knows your OS, shell and workspace, and stops with a short summary if it reaches its step limit for one request.
+- Works with models that don't support tool calling: calls a model writes out as text (in any of the common formats) run like normal ones, behind the same approval cards, and never show up in the reply, and neither do a model's private reasoning (`<think>…`) or stray template tokens.
 
-- Sage can make changes for you (run, create, update, rename, delete, push, copy…), always with your say-so: each one appears as an approval card with a one-line description of what it will do and the exact command. Press `y` to run it once, `a` to let Sage run that command on that resource again without asking for the rest of the session, or `n` to decline. Deletes always ask and carry a warning. A workflow run draws its live graph inside the card.
-- `/permissions` lists what you've let Sage run without asking, and `/permissions revoke <n>` (or `revoke all`) takes it back. The line under the prompt shows how many are allowed.
+**Conversations**
+
+- Conversations with Sage are saved. `/sessions` lists your recent ones (when, device, workspace folder), `/sessions <n>` reopens one with Sage remembering it, `/sessions delete <n>` deletes one and `/new` starts fresh. A dropped connection picks the same conversation back up. Your latest 100 are kept. Long tool output and file contents are trimmed before saving, so your files' contents aren't stored.
+- Long conversations stay fast and sharp: older tool output is shortened in what Sage remembers (it re-reads a file when it needs the exact text), and when a conversation grows long Sage summarizes its older part and carries on from the summary.
+
+**Your own model**
+
+- `sagex create model "<name>" --provider <provider> --model <model id>` adds a model with your own provider API key: Gemini, Groq, OpenRouter, Anthropic, OpenAI, Azure OpenAI, NVIDIA NIM or any LiteLLM-compatible endpoint. The key is typed at a hidden prompt or read from `--key-file`, never a flag; it's stored encrypted on Autosage and never shown again.
+- `sagex use model <name>` (or `--free`) picks what Sage answers with; `list`, `show`, `update` (`--new-key` replaces the key), `rename` and `delete model` manage them. These are the same models as Autobot's Customize panel on the web, and the choice applies to both.
+- In the terminal app, `/model` lists them with the one in use marked, and `/model <number or name>` (or `/model free`) switches. Sage can list your models and, with your approval, switch them, but never add one or change a key.
+
+**Usage**
+
+- A "Sage Today" block at the bottom of the left panel shows today's requests and tokens, the model in use and how many free requests are left, updated as Sage replies. It also says when your own model failed and Sage fell back to the free models.
+- `/usage` adds the last 7 days and all time, requests per day, the models and devices you used, and a link to the Agent Dashboard on the web, which now has a SageCode tab. The free daily allowance is shared with Autobot on the web.
+
+- `SAGEX_AI_URL` points sagex at an Autobot running on its own port (defaults to `<api url>/api/ai`).
+
+### Changed
+
+- **The workspace is the one place for local resources.** Every relative path a command takes (`push`, `render --file`, `new --output`) is relative to the workspace, never the folder you're in. The terminal app opens in the workspace and moves there when you change it (F3). Sage works only there. (Files for `--secret-file` are still read from wherever you point.)
 - A blank line under the prompt, so it doesn't sit against the footer.
-- Sage can work with files in your workspace: read them, write them (it shows the new file, or a diff when it replaces one, before you approve) and delete them (always asks). Only files in the workspace, and never ones that usually hold secrets (`.env`, keys, certificates, `.git`, `.ssh`…). "Create a script that…" now ends with the script written and pushed.
-- Sage can run shell commands on your machine (checking a version, installing a tool) in your current shell, after you approve each one. It can't type into prompts, see your SageCode key or print environment variables, and commands that delete things, need admin rights or download-and-run code always ask, with a warning.
-- Sage edits files in place: it changes just the lines that need changing (shown as a diff) instead of rewriting the whole file. Allowing Sage to write a file for the session covers its edits too.
-- Long conversations stay fast: output from earlier replies is shortened in what Sage remembers, and it re-reads a file when it needs the exact text.
-- Sage plans better: it says up front when something isn't possible with its tools instead of trying anyway, and it knows where your OS, shell and folders are.
-- Sage works with models that don't support tool calling. Calls such a model writes out as text (in any of the common formats) run like normal ones (same approval cards) and never show up in the reply, and neither do a model's private reasoning (`<think>…`) or stray chat-template tokens. If your personal model rejects tools entirely, Sage describes them in text instead and tells you once that a model with tool support works better.
-
-- **Conversations with Sage are saved.** `/sessions` lists your recent ones (when, device, workspace folder), `/sessions <n>` reopens one with its recent messages and Sage remembering it, `/sessions delete <n>` deletes one, and `/new` starts fresh. A dropped or idle connection picks the same conversation back up instead of starting over. Your latest 100 conversations are kept. Long tool output and file contents are trimmed before saving, so the contents of your files aren't stored.
-- **See what you've used.** A small "Sage Today" block at the bottom of the left panel shows today's requests and tokens, the model in use and how many free requests are left; it updates as Sage replies. `/usage` adds the last 7 days and all time, requests per day, the models and devices you used, and a link to the full dashboard on the web, which now has a SageCode tab. The free daily allowance is shared with Autobot on the web.
-- **Use your own model.** `sagex create model "<name>" --provider <provider> --model <model id>` adds a model with your own provider API key (Gemini, Groq, OpenRouter, Anthropic, OpenAI, Azure OpenAI, NVIDIA NIM or any LiteLLM-compatible endpoint). The key is typed at a hidden prompt or read from `--key-file`, never a flag, and it's stored encrypted on Autosage and never shown again. `sagex use model <name>` (or `--free`) picks what Sage answers with, and `list`, `show`, `update` (`--new-key` replaces the key), `rename` and `delete model` manage them. These are the same models as Autobot's Customize panel on the web, and the choice applies to both.
-- In the terminal app, `/model` lists your models with the one in use marked and `/model <number or name>` (or `/model free`) switches. The "Sage today" block shows the model in use, and says so if your model failed and Sage fell back to the free models. Sage can list your models and, with your approval, switch them, but it can never add one or change a key.
-- Long conversations stay sharp: when one grows long, Sage summarizes its older part and keeps working from the summary (you'll see a note when it does).
 
 ### Security
 
 - Sage's replies can't control your terminal: escape sequences (colours, cursor moves, hidden hyperlinks, window titles) and text-direction tricks are removed before anything is shown, in replies and on tool cards.
-- Only web (`http`, `https`) and `mailto` links in Sage's replies are clickable. A link to anything else (a program on your disk, a Windows settings page, a local file) is shown as plain text, and a link whose text names one website but points to another shows where it really goes.
-
-### Changed
-
-- **The workspace is the one place for local resources.** Every relative path a command takes (`push`, `render --file`, `new --output`) is relative to the workspace, never the folder you're in, so it doesn't matter where you start sagex or run a command. The terminal app opens in the workspace and moves there when you change it (F3). Sage works only there: its sagex commands, files and shell commands all run in the workspace, and paths it passes to sagex can't leave it. (Secret files for `--secret-file` are still read from wherever you point.)
+- Only web (`http`, `https`) and `mailto` links in Sage's replies are clickable. Anything else (a program on your disk, a Windows settings page, a local file) is shown as plain text, and a link whose text names one website but points to another shows where it really goes.
+- Commands that sign in, take a secret or print one (`auth`, vault keys, model keys, trigger secrets, `--reveal`) are never available to Sage; a run that needs a secret typed at a hidden prompt is handed back to you to run with `!`.
 
 ### Fixed
 
-- `push script <name>` could upload the wrong file: a same-named file in the current folder (such as a leftover `sagex new script` template) won over the one in `<workspace>/scripts/`. Push now looks only in the workspace, lists both files if `<workspace>/x` and `<workspace>/scripts/x` differ, and always prints which local file it used.
+- `push script <name>` could upload the wrong file: a same-named file in the current folder (such as a leftover `sagex new script` template) won over the one in `<workspace>/scripts/`. Push now looks only in the workspace, lists both files if `<workspace>/x` and `<workspace>/scripts/x` differ, and always prints which file it used.
 - "No value for 'NAME'" now says it's the script's `{{NAME}}` input with no default.
-- When Sage hits its step limit for one request it ends with a short summary and a note that it stopped, instead of a half-written tool call.
-- Sage's replies no longer lose text: HTML in a reply is shown as the formatting it means (a `<div>` block used to vanish entirely), placeholders like `<name>` and footnotes show as written, and long values in tables (ids, paths) wrap instead of being cut off with "…".
 
-Saved conversations need the matching Autosage server update.
-
-Sage uses your personal LLM key from Autobot settings when one is set; otherwise it shares Autobot's daily free allowance. Commands that sign in, take a secret or print one (`auth`, keys, trigger secrets, `--reveal`) are never available to Sage, and a run that needs a secret typed at a hidden prompt is handed back to you to run with `!`.
+Sage uses your selected personal model when you've set one; otherwise it uses Autosage's free models and the daily free allowance shared with Autobot on the web.
 
 ## [1.1.0] - 2026-11-01
 
@@ -101,5 +108,6 @@ The first public release: everything the Autosage web app does, from your termin
 
 - `SAGEX_API_KEY` (use a key without the keychain, e.g. in CI), `SAGEX_API_URL`, `SAGEX_DEBUG`.
 
+[2.0.0]: https://github.com/Lagnajit09/sagex/releases/tag/v2.0.0
 [1.1.0]: https://github.com/Lagnajit09/sagex/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Lagnajit09/sagex/releases/tag/v1.0.0

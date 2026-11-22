@@ -61,6 +61,16 @@ RUN_OUTPUT = """▶ Deploy Production · 6 nodes
 ✓ Migrate · exit 0 · 4.1s
 ✓ success · 9.8s · run 46a2ba05"""
 
+# The sidebar's "Sage Today" block (fetched from the server in the real app).
+USAGE = {"today": {"requests": 6, "total_tokens": 41230},
+         "admin_quota": {"used": 0, "limit": 30, "remaining": 30},
+         "model": {"id": "m1", "name": "My Claude", "provider": "anthropic",
+                   "model_name": "claude-sonnet-4-5"},
+         "own_key": True}
+QUESTION = "anything I should check after this deploy?"
+ANSWER = ("**Migrate** applied 3 migrations, so the app restart is the one to watch. "
+          "I can run `smoke_test.sh` on **web-1** now, if you'd like.")
+
 
 async def capture() -> str:
     store.get_key = lambda: "sgx_demo"                      # "logged in" → server tree
@@ -70,6 +80,7 @@ async def capture() -> str:
     resources.list_vault_resources = lambda c: VAULT
     resources.list_recent_runs = lambda c: RUNS
     resources.list_triggers = lambda c: TRIGGERS
+    resources.sage_usage = lambda client=None: USAGE        # never the network
     shell.ShellSession.prompt = property(lambda self: "bash · ~/infra")
 
     app = app_module.SagexApp()
@@ -84,6 +95,8 @@ async def capture() -> str:
         await pilot.pause()
         for event in RUN_EVENTS:
             graph.apply(event)
+        app.add_message(QUESTION, "user")
+        app._mount_entry(ChatMessage(ANSWER, "sage"))
         await pilot.pause(0.3)
         return app.export_screenshot(title="sagex")
 

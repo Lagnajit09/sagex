@@ -7,7 +7,7 @@
 # none is available, so this works on a machine with no Python at all.
 #
 # Environment:
-#   SAGEX_VERSION   install a specific version (e.g. 1.1.0) instead of the latest
+#   SAGEX_VERSION   install a specific version (e.g. 2.0.0) instead of the latest
 #
 # Everything runs inside a function: `irm | iex` executes in the caller's scope, so
 # top-level variables would leak into the user's session.

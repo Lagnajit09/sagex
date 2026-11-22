@@ -6,13 +6,13 @@
     <title>SageCode: Autosage in your terminal</title>
     <meta
       name="description"
-      content="SageCode is the command line for Autosage. Build, version and run workflows on your servers. Trigger them by hand, by webhook, on a schedule or from CI, and watch every node live."
+      content="SageCode is the command line for Autosage. Build, version and run workflows on your servers, watch every node live, and ask Sage, the assistant built in, to look things up and make changes with your approval."
     />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="SageCode: Autosage in your terminal" />
     <meta
       property="og:description"
-      content="Build, version and run workflows on your servers, from the terminal."
+      content="Build, version and run workflows on your servers from the terminal, with Sage, an assistant that asks before it acts."
     />
     <meta property="og:url" content="https://sagecode.web.app/" />
     <meta
@@ -70,7 +70,7 @@
             width="32"
             height="28"
           /><span class="wordmark">Sage<b>Code</b></span
-          ><small>v1.1</small></a
+          ><small>v2.0</small></a
         >
         <nav class="nav" aria-label="Main">
           <a href="#features">Features</a>
@@ -216,8 +216,8 @@
         <div class="container hero-inner">
           <a class="pill" href="changelog.html"
             ><span class="dot" aria-hidden="true"></span
-            ><span class="tag">v1.1.0</span>Now on PyPI<span class="pill-more">
-              · read the release notes</span
+            ><span class="tag">v2.0.0</span>Meet Sage, your assistant in the
+            terminal<span class="pill-more"> · read the release notes</span
             >
             →</a
           >
@@ -229,7 +229,7 @@
           <p class="lead">
             SageCode is the command line for Autosage. One command,
             <code>sagex</code>, to build, version and run workflows on your
-            servers.
+            servers, and Sage, an assistant that does the work with you.
           </p>
 
           <div class="install" data-tabs>
@@ -544,7 +544,7 @@
       <section class="section" id="features">
         <div class="container">
           <div class="stats reveal" style="margin-bottom: 96px">
-            <div class="stat"><b>56</b><span>commands in 15 groups</span></div>
+            <div class="stat"><b>63</b><span>commands in 16 groups</span></div>
             <div class="stat"><b>4</b><span>ways to start a run</span></div>
             <div class="stat">
               <b>SSH · WinRM</b><span>Linux and Windows targets</span>
@@ -814,7 +814,7 @@
               Run <code>sagex</code> on its own to open a full-screen app: your
               resources on the left, a live transcript on the right. Start any
               command with <code>!</code> and watch workflow runs draw
-              themselves.
+              themselves, or type a question to ask Sage.
             </p>
           </div>
           <a
@@ -829,7 +829,7 @@
               width="1726"
               height="928"
               loading="lazy"
-              alt="The SageCode terminal app. Workflows, scripts, vault items, recent runs and triggers are listed on the left. On the right, a finished run of Deploy Production shows each node with its exit code and duration."
+              alt="The SageCode terminal app. Workflows, scripts, vault items, recent runs and triggers are listed on the left, with today's Sage usage and model at the bottom. On the right, a finished run of Deploy Production shows each node with its exit code and duration."
             />
           </a>
           <a
@@ -841,6 +841,7 @@
           >
           <div class="keys reveal">
             <span><kbd>!</kbd> run a command</span>
+            <span>no <kbd>!</kbd> ask Sage</span>
             <span><kbd>Esc</kbd> stop it</span>
             <span><kbd>↑</kbd><kbd>↓</kbd> history</span>
             <span><kbd>F2</kbd> switch shell</span>
@@ -851,11 +852,102 @@
         </div>
       </section>
 
-      <!-- ── 04 Architecture ──────────────────────────────────────────────── -->
+      <!-- ── 04 Sage ──────────────────────────────────────────────────────── -->
+      <section class="section" id="sage">
+        <div class="container split wide-right">
+          <div class="reveal">
+            <div class="eyebrow"><b>04</b> Sage</div>
+            <h2 style="font-size: clamp(1.9rem, 3.4vw, 2.75rem)">
+              Ask in plain language. Approve what it does.
+            </h2>
+            <p
+              style="
+                margin-top: 18px;
+                font-size: 1.075rem;
+                color: var(--text-2);
+              "
+            >
+              In the terminal app, type a question without <code>!</code> and
+              Sage, your Autosage assistant, answers. It looks things up on its
+              own and asks before it changes anything.
+            </p>
+            <ul class="checklist">
+              <li>
+                <b>Shows its work</b>: every command it runs appears as a card
+                with the exact command and its output
+              </li>
+              <li>
+                <b>Asks first</b>: <kbd>y</kbd> runs a change once,
+                <kbd>a</kbd> allows it for the session, <kbd>n</kbd> declines.
+                Deletes always ask; <code>/permissions</code> takes allowances
+                back
+              </li>
+              <li>
+                <b>Files and shell</b>: reads, writes and edits files in your
+                workspace and runs shell commands, each one approved
+              </li>
+              <li>
+                <b>Remembers</b>: conversations are saved;
+                <code>/sessions</code> reopens one, <code>/new</code> starts
+                fresh
+              </li>
+              <li>
+                <b>Your own model</b>: add one with
+                <code>sagex create model</code>, switch with
+                <code>/model</code>
+              </li>
+              <li>
+                <b>Usage at a glance</b>: today's requests, tokens and model sit
+                in the sidebar; <code>/usage</code> has the rest
+              </li>
+            </ul>
+            <p style="margin-top: 22px; color: var(--text-3); font-size: 0.95rem">
+              Sage never signs in, never takes or shows a secret, and can't add
+              a model key. Runs that need a password are handed back to you.
+            </p>
+          </div>
+
+          <div class="term reveal">
+            <div class="term-bar">
+              <span class="term-dots" aria-hidden="true"
+                ><i></i><i></i><i></i></span
+              ><span class="term-title">sagex · Sage</span>
+            </div>
+            <div class="term-body">
+              <span class="l"
+                ><span class="t-brand">you</span> why did the last Deploy run
+                fail?</span
+              ><span class="l t-dim"
+                >╭ sagex_read · sagex show run latest --logs</span
+              ><span class="l t-dim"
+                >│ <span class="t-err">✗</span> migrate exit 1 · ERROR: column
+                "region" already exists</span
+              ><span class="l t-dim">╰ <span class="t-ok">✓</span> 1.4s</span
+              ><span class="l"
+                ><span class="t-brand">Sage</span> The <b>migrate</b> node
+                failed: its migration had already run on this database. I can
+                make it skip existing columns and rerun it.</span
+              ><span class="l t-dim"
+                >╭ <span class="t-warn">Approve?</span> Make the migration safe
+                to rerun</span
+              ><span class="l t-dim">│ edit_file scripts/migrate.py</span
+              ><span class="l t-del">│ - op.add_column("users", region)</span
+              ><span class="l t-add"
+                >│ + if "region" not in columns: op.add_column(…)</span
+              ><span class="l"
+                >╰ <kbd>y</kbd> run once · <kbd>a</kbd> this session ·
+                <kbd>n</kbd> don't</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 05 Architecture ──────────────────────────────────────────────── -->
       <section class="section">
         <div class="container">
           <div class="section-head reveal">
-            <div class="eyebrow"><b>04</b> Architecture</div>
+            <div class="eyebrow"><b>05</b> Architecture</div>
             <h2>Your terminal, a control plane, your servers.</h2>
             <p>
               SageCode never connects to your servers itself. It talks to the
@@ -904,11 +996,11 @@
         </div>
       </section>
 
-      <!-- ── 05 Security ──────────────────────────────────────────────────── -->
+      <!-- ── 06 Security ──────────────────────────────────────────────────── -->
       <section class="section">
         <div class="container split">
           <div class="reveal">
-            <div class="eyebrow"><b>05</b> Security</div>
+            <div class="eyebrow"><b>06</b> Security</div>
             <h2 style="font-size: clamp(1.9rem, 3.4vw, 2.75rem)">
               Secrets stay secret.
             </h2>
@@ -964,8 +1056,8 @@
               ></span>
               <h3>Never on the command line</h3>
               <p>
-                Passwords and keys go in at hidden prompts, or from a file you
-                point to. Never as flags.
+                Passwords, SSH keys and your own model's API key go in at hidden
+                prompts, or from a file you point to. Never as flags.
               </p>
             </article>
             <article class="card">
@@ -1018,25 +1110,25 @@
         </div>
       </section>
 
-      <!-- ── 06 Releases ──────────────────────────────────────────────────── -->
+      <!-- ── 07 Releases ──────────────────────────────────────────────────── -->
       <section class="section">
         <div class="container">
           <div class="section-head reveal">
-            <div class="eyebrow"><b>06</b> Releases</div>
+            <div class="eyebrow"><b>07</b> Releases</div>
             <h2>Versioned like your infrastructure.</h2>
             <p>
               SageCode follows semantic versioning and ships from tagged
-              releases straight to PyPI. Here's where it's headed.
+              releases straight to PyPI. Here's the story so far.
             </p>
           </div>
           <div class="train reveal">
             <svg
               viewBox="0 0 1100 150"
               role="img"
-              aria-label="Release history: v1.0.0 and v1.1.0 shipped; v2.0 planned."
+              aria-label="Release history: v1.0.0 and v1.1.0 shipped; v2.0.0 is the current release."
             >
               <path class="g-main" d="M20 82 H1080" />
-              <path class="g-done" d="M20 82 H620" />
+              <path class="g-done" d="M20 82 H980" />
               <path
                 class="g-branch"
                 d="M380 82 C410 82 410 40 440 40 H560 C590 40 590 82 620 82"
@@ -1051,11 +1143,11 @@
               <circle class="g-commit done" cx="300" cy="82" r="7" />
               <circle class="g-commit done" cx="480" cy="40" r="4.5" />
               <circle class="g-commit done" cx="530" cy="40" r="4.5" />
-              <circle class="pulse" cx="620" cy="82" r="8" />
-              <circle class="g-commit done" cx="620" cy="82" r="8" />
-              <circle class="g-commit" cx="790" cy="124" r="4.5" />
-              <circle class="g-commit" cx="850" cy="124" r="4.5" />
-              <circle class="g-commit" cx="980" cy="82" r="7" />
+              <circle class="g-commit done" cx="620" cy="82" r="7" />
+              <circle class="g-commit done" cx="790" cy="124" r="4.5" />
+              <circle class="g-commit done" cx="850" cy="124" r="4.5" />
+              <circle class="pulse" cx="980" cy="82" r="8" />
+              <circle class="g-commit done" cx="980" cy="82" r="8" />
               <rect
                 class="g-tag"
                 x="258"
@@ -1068,7 +1160,7 @@
                 v1.0.0
               </text>
               <rect
-                class="g-tag now"
+                class="g-tag"
                 x="578"
                 y="96"
                 width="84"
@@ -1079,19 +1171,19 @@
                 v1.1.0
               </text>
               <rect
-                class="g-tag"
-                x="948"
+                class="g-tag now"
+                x="938"
                 y="38"
-                width="64"
+                width="84"
                 height="26"
                 rx="6"
               />
               <text class="g-tag-text" x="980" y="55.5" text-anchor="middle">
-                v2.0
+                v2.0.0
               </text>
               <text class="g-label" x="20" y="140">main</text>
               <text class="g-label" x="440" y="26">feat/sessions</text>
-              <text class="g-label" x="740" y="146">feat/autobot</text>
+              <text class="g-label" x="740" y="146">feat/sage</text>
             </svg>
             <div class="releases">
               <div class="release">
@@ -1106,7 +1198,7 @@
               </div>
               <div class="release">
                 <span class="ver"
-                  >v1.1.0 <span class="state live">live</span></span
+                  >v1.1.0 <span class="state">shipped</span></span
                 >
                 <h3>Open to everyone</h3>
                 <p>
@@ -1115,11 +1207,13 @@
                 </p>
               </div>
               <div class="release">
-                <span class="ver">v2.0 <span class="state">planned</span></span>
-                <h3>Autobot in the terminal</h3>
+                <span class="ver"
+                  >v2.0.0 <span class="state live">live</span></span
+                >
+                <h3>Sage in the terminal</h3>
                 <p>
-                  Chat, generate, run and fix, with your last command's output
-                  as context.
+                  Ask, look up, run and fix with your approval. Saved
+                  conversations, your own model and usage at a glance.
                 </p>
               </div>
             </div>
@@ -1313,7 +1407,7 @@
         </div>
         <div class="footer-bottom">
           <span>© 2026 SageCode · MIT licensed</span
-          ><span>sagex-cli 1.1.0</span>
+          ><span>sagex-cli 2.0.0</span>
         </div>
       </div>
     </footer>

@@ -39,8 +39,10 @@ Run these from the repo root, with sagex installed (`pip install -e .`):
 | The logo changed | `python web/tools/build_logo.py`, then re-render `apple-touch-icon.png` (the header uses `mark-dark.svg` / `mark-light.svg`, one per theme) |
 | The share image changed | re-render `tools/og-cover.html` (see the comment at its top) |
 
-The landing page's command count (56) and the version in the header and footer
-are written by hand; update them when they change.
+The landing page's command count (63 commands in 16 groups) and the version in
+the header and footer are written by hand; update them when they change. A new
+top-level command group also needs a blurb in `GROUPS` in
+`tools/build_commands.py`, or its commands won't show on the commands page.
 
 ## Deploy
 
