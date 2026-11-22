@@ -52,6 +52,7 @@ All notable changes to sagex are recorded here. Versions follow [Semantic Versio
 
 - `push script <name>` could upload the wrong file: a same-named file in the current folder (such as a leftover `sagex new script` template) won over the one in `<workspace>/scripts/`. Push now looks only in the workspace, lists both files if `<workspace>/x` and `<workspace>/scripts/x` differ, and always prints which file it used.
 - "No value for 'NAME'" now says it's the script's `{{NAME}}` input with no default.
+- Saving a setting (your shell, your workspace) also saved the Autosage server address, which then overrode the address in every later install. Only settings you changed are saved now, and `auth login` and `auth status` say which server you're using whenever it isn't the built-in one.
 
 Sage uses your selected personal model when you've set one; otherwise it uses Autosage's free models and the daily free allowance shared with Autobot on the web.
 

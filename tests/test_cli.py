@@ -54,6 +54,30 @@ def test_env_overrides_api_url_without_persisting(monkeypatch):
     assert config.api_url() == config.DEFAULT_API_URL
 
 
+def test_saving_settings_never_pins_the_built_in_server(monkeypatch):
+    # Saving the shell used to write this build's API address too, pinning every
+    # later install (a newer release, a dev build) to it.
+    settings = config.load()
+    settings["shell"] = "pwsh"
+    config.save(settings)
+    import json
+    assert json.loads(config.CONFIG_FILE.read_text()) == {"shell": "pwsh"}
+    monkeypatch.setattr(config, "DEFAULT_API_URL", "https://new.example.com")
+    monkeypatch.setitem(config.DEFAULTS, "api_url", "https://new.example.com")
+    assert config.api_url() == "https://new.example.com"     # follows the new release
+    assert config.api_url_source() is None
+
+
+def test_a_chosen_server_is_kept_and_named_at_login(monkeypatch):
+    config.save({**config.load(), "api_url": "http://localhost:8080"})
+    assert config.api_url() == "http://localhost:8080"
+    assert config.api_url_source() == str(config.CONFIG_FILE)
+    monkeypatch.setattr(cli, "_login_with_browser", lambda no_browser: (_ for _ in ()).throw(SystemExit(0)))
+    result = runner.invoke(app, ["auth", "login"])
+    assert "Using the Autosage server at http://localhost:8080" in result.output
+    assert "config.json" in result.output
+
+
 def test_unreachable_server_message_is_generic():
     client = ApiClient("http://127.0.0.1:9", "sgx_test")
     with pytest.raises(ApiError) as info:

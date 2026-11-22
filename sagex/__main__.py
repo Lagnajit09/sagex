@@ -448,6 +448,16 @@ def _end_session(key: str) -> str | None:
         return "ended" if exc.status == 401 else None    # 401: it was already dead
 
 
+def _server_note() -> str | None:
+    """'Using http://localhost:8080 (from …)' when sagex isn't talking to the hosted
+    Autosage server — so a leftover override can't go unnoticed."""
+    source = config.api_url_source()
+    if source is None:
+        return None
+    where = "the SAGEX_API_URL environment variable" if source == "SAGEX_API_URL" else source
+    return f"Using the Autosage server at {config.api_url()} (set in {where})."
+
+
 def _login_with_browser(no_browser: bool) -> tuple[str, str]:
     """The device flow: show a code, let the user approve it on the web, collect the
     new key. Returns (key, ' as <email> on <device>')."""
@@ -524,6 +534,9 @@ def auth_login(
         _no_keychain_help("your session")
         raise typer.Exit(code=1)
     previous = store.keychain_key()
+    note = _server_note()
+    if note:
+        render.note(note)
 
     key, who = _login_with_token() if with_token else _login_with_browser(no_browser)
 
@@ -572,6 +585,9 @@ def auth_status() -> None:
     render.note(f"  Activity: {commands} command{'s' if commands != 1 else ''} · "
                 f"{runs} run{'s' if runs != 1 else ''} started")
     render.note(f"  Manage your sessions: {_SESSIONS_PAGE}")
+    note = _server_note()
+    if note:
+        render.note(f"  {note}")
 
 
 @auth_app.command("logout")

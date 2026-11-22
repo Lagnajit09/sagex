@@ -55,13 +55,29 @@ def load() -> dict:
 
 
 def save(settings: dict) -> None:
-    """Write settings to disk, creating ~/.sagex if needed. Best-effort."""
+    """Write settings to disk, creating ~/.sagex if needed. Best-effort.
+
+    Values equal to their default aren't written: saving the shell used to also
+    write this build's API address, which then pinned every later install (a
+    newer release, or a dev build vs the published one) to that address.
+    """
+    stored = {k: v for k, v in settings.items() if k not in DEFAULTS or v != DEFAULTS[k]}
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
+            json.dump(stored, f, indent=2)
     except OSError:
         pass                          # can't write? oh well — don't crash
+
+
+def api_url_source() -> str | None:
+    """Where a non-default API address comes from ("SAGEX_API_URL" or the config
+    file's path), or None when sagex uses the built-in Autosage server."""
+    if os.environ.get("SAGEX_API_URL", "").strip():
+        return "SAGEX_API_URL"
+    if load()["api_url"] != DEFAULT_API_URL:
+        return str(CONFIG_FILE)
+    return None
 
 
 def api_url() -> str:
