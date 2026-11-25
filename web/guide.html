@@ -242,8 +242,7 @@
               <tr><td><code>workflows/</code></td><td>Workflow JSON, from <code>new</code>, <code>copy</code> or for <code>push</code></td></tr>
               <tr><td><code>scripts/</code></td><td>Script files, from <code>new</code>, <code>copy</code> or for <code>push</code></td></tr>
               <tr><td><code>logs/script/&lt;id&gt;/</code></td><td>Saved by <code>run script</code></td></tr>
-              <tr><td><code>logs/workflow/&lt;run id&gt;/</code></td><td>Saved by <code>run workflow</code>, <code>trigger fire</code> and <code>trigger watch</code></td></tr>
-              <tr><td><code>runs/</code></td><td>Run metadata and logs, from <code>copy run</code></td></tr>
+              <tr><td><code>logs/workflow/&lt;run id&gt;/</code></td><td>Run metadata and logs: saved by <code>run workflow</code>, <code>rerun</code>, <code>watch</code>, <code>trigger fire</code> and <code>trigger watch</code>, and by <code>copy run</code></td></tr>
             </tbody>
           </table>
           <p>Commands that read a local file accept a path, or just a name inside the matching folder: <code>sagex push script deploy</code> finds <code>scripts/deploy.sh</code>. Relative paths always start from the workspace, never the folder you're in, so it doesn't matter where you run a command. Once you've set a workspace, the terminal app opens there too.</p>
@@ -350,12 +349,12 @@
         </section>
 
         <section id="runs">
-          <h2>Look into past runs</h2>
+          <h2>Runs: look back, follow, repeat</h2>
           <div class="term">
             <div class="term-bar"><span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="term-title">terminal</span></div>
-            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex list run --limit 10</span><span class="l"><span class="t-cli">❯</span> sagex show run 46a2 --logs     <span class="t-dim"># status, each node, and its output</span></span><span class="l"><span class="t-cli">❯</span> sagex copy run --since 7days   <span class="t-dim"># into runs/ in your workspace</span></span></div>
+            <div class="term-body"><span class="l"><span class="t-cli">❯</span> sagex list run --limit 10</span><span class="l"><span class="t-cli">❯</span> sagex show run 46a2 --logs     <span class="t-dim"># status, each node, and its output</span></span><span class="l"><span class="t-cli">❯</span> sagex watch 46a2               <span class="t-dim"># follow a run that's already going</span></span><span class="l"><span class="t-cli">❯</span> sagex rerun 46a2               <span class="t-dim"># run it again with the same inputs</span></span><span class="l"><span class="t-cli">❯</span> sagex cancel 46a2              <span class="t-dim"># stop a queued or running run</span></span><span class="l"><span class="t-cli">❯</span> sagex copy run --since 7days   <span class="t-dim"># into logs/workflow/ in your workspace</span></span></div>
           </div>
-          <p>Run logs are kept for 90 days. <code>copy run --since</code> takes <code>1day</code>, <code>7days</code>, <code>1month</code> or <code>all</code>.</p>
+          <p><code>watch</code> works for a run started anywhere (the web app, a trigger, Sage); <code>Ctrl+C</code> stops watching and leaves the run going. <code>rerun</code> asks again for any secrets the earlier run was given, since Autosage keeps them only masked. Run logs are kept for 90 days. <code>copy run --since</code> takes <code>1day</code>, <code>7days</code>, <code>1month</code> or <code>all</code>.</p>
         </section>
 
         <section id="app">

@@ -180,6 +180,12 @@ def describe(check: Check) -> str:
     Shown when Sage gave no summary; never depends on anything the model said.
     """
     path, ref = check.path, f" {check.ref}" if check.ref else ""
+    if path == ("rerun",):
+        return f"Run the workflow of run{ref} again, with that run's inputs"
+    if path == ("watch",):
+        return f"Follow run{ref} live until it ends"
+    if path == ("cancel",):
+        return f"Cancel run{ref}"
     if path == ("workspace", "set"):
         return f"Set the workspace folder to{ref}"
     if path[0] == "trigger" and len(path) > 1:
@@ -188,7 +194,7 @@ def describe(check: Check) -> str:
         return f"Copy {' '.join(path[1:])}{ref} into your workspace"
     if path[0] == "new":
         return f"Create a new local {' '.join(path[1:])} file{ref}"
-    return f"{path[0].capitalize()} {' '.join(path[1:])}{ref}".rstrip()
+    return " ".join([path[0].capitalize(), *path[1:]]) + ref
 
 
 def warning(check: Check) -> str | None:
@@ -197,6 +203,10 @@ def warning(check: Check) -> str | None:
         return "Deletes the vault and every server and credential in it. Can't be undone."
     if check.path == ("use", "model"):
         return "Changes the model Sage answers with — and Autobot on the web, too (account-wide)."
+    if check.path == ("cancel",):
+        return "Stops the run where it is; the remaining nodes won't run."
+    if check.path == ("move", "key"):
+        return "Workflows that use this key name its old vault and fail until they're updated."
     if check.always_ask:
         return "Deletes it permanently. Can't be undone."
     return None

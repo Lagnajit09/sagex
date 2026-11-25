@@ -15,7 +15,8 @@ from sagex.api import client as api_client
 runner = CliRunner()
 
 GROUPS = ["auth", "workspace", "show", "render", "list", "copy", "push", "new",
-          "create", "update", "delete", "trigger", "rename", "run", "use"]
+          "create", "update", "delete", "trigger", "rename", "run", "use", "move",
+          "rerun", "watch", "cancel"]
 
 
 @pytest.fixture(autouse=True)

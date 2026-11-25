@@ -675,6 +675,28 @@ def update_credential(client: ApiClient, credential_id, payload: dict) -> dict:
     return client.put(f"/api/vault/credentials/{credential_id}/", json=payload)
 
 
+def move_credential(client: ApiClient, credential_id, vault_id) -> dict:
+    """Move a credential to another of your vaults; returns the masked record.
+
+    The server only checks ownership: it doesn't unlink servers that use the key
+    or touch workflows that name it, so callers check those first.
+    """
+    return client.post(f"/api/vault/credentials/{credential_id}/move-to-vault/",
+                       json={"vault_id": str(vault_id)})
+
+
+def workflow_credential_ids(wf: dict) -> set[str]:
+    """Ids of every credential a workflow's nodes name (script targets + SMTP)."""
+    ids = set()
+    for n in wf.get("nodes") or []:
+        data = n.get("data") if isinstance(n.get("data"), dict) else {}
+        for block in ("vaultDetails", "smtpConfig"):
+            cid = (data.get(block) or {}).get("credentialId") if isinstance(data.get(block), dict) else None
+            if cid:
+                ids.add(str(cid))
+    return ids
+
+
 def resolve_server(client: ApiClient, ref: str) -> dict:
     """Resolve a vault server by id or name; returns its detail (enriched).
 

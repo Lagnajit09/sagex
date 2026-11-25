@@ -23,6 +23,18 @@ window.SAGEX_COMMANDS = {
    "blurb": "Run a script or workflow now and follow it live."
   },
   {
+   "name": "rerun",
+   "blurb": "Run a workflow again with an earlier run's inputs, and follow it live."
+  },
+  {
+   "name": "watch",
+   "blurb": "Follow a run that's already going, wherever it was started."
+  },
+  {
+   "name": "cancel",
+   "blurb": "Cancel a queued or running workflow run."
+  },
+  {
    "name": "trigger",
    "blurb": "HTTP webhooks and cron schedules: set up, fire, follow and rotate."
   },
@@ -53,6 +65,10 @@ window.SAGEX_COMMANDS = {
   {
    "name": "rename",
    "blurb": "Rename a resource in place."
+  },
+  {
+   "name": "move",
+   "blurb": "Move a key to another vault (checks the servers and workflows that use it)."
   },
   {
    "name": "delete",
@@ -580,6 +596,99 @@ window.SAGEX_COMMANDS = {
    ]
   },
   {
+   "group": "rerun",
+   "name": "rerun",
+   "usage": "sagex rerun <ref>",
+   "summary": "Run a workflow again with an earlier run's inputs, and follow it live.",
+   "details": [
+    "Starts a new manual run of that run's workflow (as the workflow is now), sending the earlier run's parameter values again; --param changes one. Secrets it was given are asked for again at a hidden prompt, because Autosage keeps them only masked. Ctrl+C cancels the new run (press it again to detach). The logs are saved under <workspace>/logs/workflow/<run_id>/ when it ends."
+   ],
+   "params": [
+    {
+     "kind": "arg",
+     "name": "ref",
+     "required": true,
+     "help": "Run id (or an id prefix) to run again."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--param",
+      "-p"
+     ],
+     "takes_value": true,
+     "help": "Change a parameter as NAME=VALUE (or PARAM_ID=VALUE when a name repeats across nodes). Repeatable; secrets are asked for at a hidden prompt."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--notify"
+     ],
+     "takes_value": true,
+     "help": "Email this address when the run finishes."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--no-log"
+     ],
+     "takes_value": false,
+     "help": "Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."
+    }
+   ]
+  },
+  {
+   "group": "watch",
+   "name": "watch",
+   "usage": "sagex watch <ref>",
+   "summary": "Follow a workflow run that's already going, live, node by node.",
+   "details": [
+    "For a run started anywhere: the web app, a trigger, Sage or another terminal. The graph starts with the nodes already done. Ctrl+C stops watching; the run keeps going. A run that has already finished is shown as it ended. The logs are saved under <workspace>/logs/workflow/<run_id>/ when it ends."
+   ],
+   "params": [
+    {
+     "kind": "arg",
+     "name": "ref",
+     "required": true,
+     "help": "Run id (or an id prefix) to follow."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--no-log"
+     ],
+     "takes_value": false,
+     "help": "Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."
+    }
+   ]
+  },
+  {
+   "group": "cancel",
+   "name": "cancel",
+   "usage": "sagex cancel <ref>",
+   "summary": "Cancel a queued or running workflow run.",
+   "details": [
+    "The node running now is stopped and the rest don't run. Asks first unless --yes."
+   ],
+   "params": [
+    {
+     "kind": "arg",
+     "name": "ref",
+     "required": true,
+     "help": "Run id (or an id prefix) to cancel."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--yes",
+      "-y"
+     ],
+     "takes_value": false,
+     "help": "Skip the confirmation prompt."
+    }
+   ]
+  },
+  {
    "group": "trigger",
    "name": "create",
    "usage": "sagex trigger create <workflow>",
@@ -1045,7 +1154,7 @@ window.SAGEX_COMMANDS = {
    "group": "copy",
    "name": "run",
    "usage": "sagex copy run [ref]",
-   "summary": "Copy a run's metadata + logs to <workspace>/runs/ (one folder per run).",
+   "summary": "Copy a run's metadata + logs to <workspace>/logs/workflow/<run_id>/ (one folder per run).",
    "details": [],
    "params": [
     {
@@ -1723,6 +1832,48 @@ window.SAGEX_COMMANDS = {
      "name": "new_name",
      "required": true,
      "help": "New name (unique among your models)."
+    }
+   ]
+  },
+  {
+   "group": "move",
+   "name": "key",
+   "usage": "sagex move key <ref>",
+   "summary": "Move a key (credential) to another vault. Its secrets move with it, unseen.",
+   "details": [
+    "Refused while a server uses the key, since a server's key must be in the server's own vault: attach another key first (sagex update server <name> --key <key>, or --unlink-key). Workflows whose nodes use the key are listed. They name its old vault, so they fail until those nodes are updated. Asks first unless --yes."
+   ],
+   "params": [
+    {
+     "kind": "arg",
+     "name": "ref",
+     "required": true,
+     "help": "Credential (key) name or id."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--to"
+     ],
+     "takes_value": true,
+     "help": "Vault (name or id) to move it to."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--vault"
+     ],
+     "takes_value": true,
+     "help": "The key's current vault (name or id) — for a name shared across vaults."
+    },
+    {
+     "kind": "opt",
+     "flags": [
+      "--yes",
+      "-y"
+     ],
+     "takes_value": false,
+     "help": "Skip the confirmation prompt."
     }
    ]
   },

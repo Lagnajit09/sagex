@@ -1,7 +1,7 @@
 # Publishes a release when a version tag is pushed — and only then (no path filter:
 # it never runs for ordinary pushes to main):
 #
-#   git tag v2.0.1 && git push origin v2.0.1
+#   git tag v2.1.0 && git push origin v2.1.0
 #
 # Push the tag only after the release commit is in it (tag the commit you mean to
 # ship), and don't create the GitHub release by hand: this workflow builds the

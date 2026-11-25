@@ -2,6 +2,21 @@
 
 All notable changes to sagex are recorded here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-11-25
+
+### Added
+
+- `sagex rerun <run>` runs a workflow again with an earlier run's inputs and follows it live, like `run workflow`. `-p NAME=VALUE` changes a value. Secrets the earlier run was given are asked for again at a hidden prompt, because Autosage keeps them only masked. It starts an ordinary manual run of the workflow as it is now.
+- `sagex watch <run>` follows a run that's already going, whether it was started from the web app, a trigger, Sage or another terminal. The graph starts with the nodes already done. `Ctrl+C` stops watching and leaves the run going. Its logs are saved when it ends.
+- `sagex cancel <run>` cancels a queued or running workflow run, after confirming (`--yes` skips that).
+- Sage can use all three. Each one shows an approval card first, and cancelling says that the remaining nodes won't run.
+- `sagex move key <key> --to <vault>` moves a key to another of your vaults. Its secrets move with it, unseen. It's refused while a server uses the key, because a server's key has to be in the server's own vault; the message names those servers and the command to fix each one. Workflows that use the key are listed before you confirm, because they fail until their nodes are pointed at the new vault.
+
+### Changed
+
+- `sagex copy run` saves to `logs/workflow/<run_id>/`, the folder a run you followed live is saved to, instead of `runs/<workflow>__<id>/`. Folders already in `runs/` are left as they are.
+- When a run you were following is detached, the hint points to `sagex watch <run>` to pick it up again.
+
 ## [2.0.1] - 2026-11-22
 
 ### Fixed
@@ -113,6 +128,7 @@ The first public release: everything the Autosage web app does, from your termin
 
 - `SAGEX_API_KEY` (use a key without the keychain, e.g. in CI), `SAGEX_API_URL`, `SAGEX_DEBUG`.
 
+[2.1.0]: https://github.com/Lagnajit09/sagex/releases/tag/v2.1.0
 [2.0.1]: https://github.com/Lagnajit09/sagex/releases/tag/v2.0.1
 [2.0.0]: https://github.com/Lagnajit09/sagex/releases/tag/v2.0.0
 [1.1.0]: https://github.com/Lagnajit09/sagex/releases/tag/v1.1.0

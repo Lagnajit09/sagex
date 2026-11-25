@@ -32,7 +32,7 @@ curl -LsSf https://raw.githubusercontent.com/Lagnajit09/sagex/main/scripts/insta
 irm https://raw.githubusercontent.com/Lagnajit09/sagex/main/scripts/install.ps1 | iex
 ```
 
-The installer uses [uv](https://docs.astral.sh/uv/) to install sagex as an isolated tool, and fetches Python 3.11+ for you if needed. Set `SAGEX_VERSION=2.0.1` before running it to pin a version.
+The installer uses [uv](https://docs.astral.sh/uv/) to install sagex as an isolated tool, and fetches Python 3.11+ for you if needed. Set `SAGEX_VERSION=2.1.0` before running it to pin a version.
 
 **Already have a Python tool manager?** Any of these works (Python 3.11 or newer):
 
@@ -106,6 +106,9 @@ Resources can be referred to by **name or id**. An id prefix works for runs. Mos
 | `show` | `workflow` · `script` · `run` · `trigger` · `vault` · `server` · `key` · `model` | One resource in detail; `show run --logs` prints node output, `show key --reveal` shows secrets after confirming |
 | `render` | `workflow` | Draw a workflow as a flow tree (from the server, or a local file with `--file`) |
 | `run` | `script` · `workflow` | Run now and stream output live. `Ctrl+C` stops it. Pass inputs with `-p NAME=VALUE` |
+| `rerun` | `<run>` | Run a workflow again with an earlier run's inputs (`-p` changes one; secrets are asked for again) and follow it live |
+| `watch` | `<run>` | Follow a run that's already going, started anywhere. `Ctrl+C` stops watching; the run keeps going |
+| `cancel` | `<run>` | Cancel a queued or running workflow run, after confirming |
 | `trigger` | `create` · `fire` · `poll` · `watch` · `invoke` · `enable` · `disable` · `regenerate` | HTTP webhooks and cron schedules: set up, fire, follow and rotate |
 | `new` | `workflow` · `script` | Scaffold a local file, ready to edit |
 | `push` | `workflow` · `script` | Create on the server from a local file, or update after confirming (scripts show a diff) |
@@ -113,6 +116,7 @@ Resources can be referred to by **name or id**. An id prefix works for runs. Mos
 | `create` | `vault` · `server` · `key` · `model` | Create vault resources, or add your own model |
 | `update` | `vault` · `server` · `key` · `model` | Change them, or rotate a key's secret / a model's API key |
 | `rename` | `workflow` · `script` · `vault` · `server` · `key` · `model` | Rename in place |
+| `move` | `key` | Move a key to another vault (`--to`); refused while a server uses it, and lists the workflows that do |
 | `delete` | `workflow` · `script` · `vault` · `server` · `key` · `model` · `trigger` | Delete, after confirming |
 | `use` | `model` | Choose the model Sage (and Autobot on the web) answers with, or `--free` |
 | `workspace` | `set` · `show` | Choose the local folder sagex reads from and writes to |
@@ -140,9 +144,9 @@ sagex keeps local files in one folder: your **workspace**. It defaults to the cu
 ```
 workflows/               workflow JSON (sagex new / copy / push)
 scripts/                 script files  (sagex new / copy / push)
-runs/                    run metadata + logs (sagex copy run)
 logs/script/<id>/        saved by sagex run script
-logs/workflow/<run_id>/  saved by sagex run workflow / trigger fire
+logs/workflow/<run_id>/  run metadata + logs: saved by sagex run workflow / rerun / watch /
+                         trigger fire, and by sagex copy run
 ```
 
 ## Signing in

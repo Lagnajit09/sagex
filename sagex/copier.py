@@ -8,14 +8,17 @@ formatting lives here (that's render.py) — this is reusable by the TUI later.
 Layout under the workspace:
     workflows/<name>.json          workflow detail (re-importable: name/description/nodes/edges)
     scripts/<name.ext>             raw code (name already carries the real extension)
-    runs/<workflow>__<id8>/        one folder per run
+    logs/workflow/<run_id>/        one folder per workflow run: saved when a run
+                                   followed live ends (`run workflow`, `rerun`, `watch`,
+                                   `trigger fire`) and by `sagex copy run`
         run.json                   slim run metadata + node summary
         logs.log                   header + per-node stdout/stderr (mirrors the web app)
     logs/script/<execution_id>/    saved live by `sagex run script`
         run.json                   target, inputs (secrets masked), final status
         logs.log                   header + timestamped output in arrival order
-    logs/workflow/<run_id>/        saved by `sagex run workflow` when the run ends
-        run.json, logs.log         same shape as runs/ above
+
+(sagex before 2.1 wrote `copy run` to runs/<workflow>__<id8>/; those folders are
+left alone.)
 
 Secrets are never written: keys/credentials are refused at the CLI layer, and runs
 past the 90-day retention window get a note instead of (unavailable) log bytes.
@@ -127,11 +130,18 @@ def _aggregate_logs(run: dict, nodes: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def run_folder(workspace: Path, run_id) -> Path:
+    """Where a workflow run's files live: <ws>/logs/workflow/<run_id>/."""
+    return workspace / "logs" / "workflow" / safe_name(str(run_id or ""), "run")
+
+
 def copy_run(client, workspace: Path, run: dict) -> list[Path]:
-    """Write <ws>/runs/<workflow>__<id8>/{run.json, logs.log}. Returns paths written."""
-    rid = str(run.get("id") or "")
-    folder = workspace / "runs" / f"{safe_name(run.get('workflow_name'), 'run')}__{rid[:8]}"
-    return _write_run_bundle(client, folder, run)
+    """Write <ws>/logs/workflow/<run_id>/{run.json, logs.log}. Returns paths written.
+
+    The same folder a live-followed run saves to, so a run copied later lands
+    where `sagex run workflow` would have put it (and overwrites that copy).
+    """
+    return _write_run_bundle(client, run_folder(workspace, run.get("id")), run)
 
 
 def save_workflow_run(client, workspace: Path, run: dict, nodes: list[dict] | None = None) -> Path:
@@ -140,7 +150,7 @@ def save_workflow_run(client, workspace: Path, run: dict, nodes: list[dict] | No
     Logs come from the server's stored copies (not the live stream), so they're
     complete even for output that streamed before the CLI connected.
     """
-    folder = workspace / "logs" / "workflow" / safe_name(str(run.get("id") or ""), "run")
+    folder = run_folder(workspace, run.get("id"))
     _write_run_bundle(client, folder, run, nodes)
     return folder
 

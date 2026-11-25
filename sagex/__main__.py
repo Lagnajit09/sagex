@@ -35,6 +35,7 @@ from sagex.api import store
 from sagex.api import auth as cli_auth
 from sagex.api.client import set_command, set_wait_indicator
 from sagex.app import SagexApp
+from sagex.formatting import relative_time
 
 app = typer.Typer(
     help="sagex — Autosage in your terminal. Run with no command to open the terminal app.",
@@ -73,6 +74,9 @@ app.add_typer(create_app, name="create")
 
 update_app = typer.Typer(help="Update server-side resources (vaults, servers, keys, models).")
 app.add_typer(update_app, name="update")
+
+move_app = typer.Typer(help="Move a key to another vault.")
+app.add_typer(move_app, name="move")
 
 use_app = typer.Typer(help="Choose which model Sage (and Autobot on the web) answers with.")
 app.add_typer(use_app, name="use")
@@ -1032,7 +1036,7 @@ def copy_run_cmd(
         help="Copy all runs in a window instead of one: 1day | 7days | 1month | all.",
     ),
 ) -> None:
-    """Copy a run's metadata + logs to <workspace>/runs/ (one folder per run)."""
+    """Copy a run's metadata + logs to <workspace>/logs/workflow/<run_id>/ (one folder per run)."""
     client = _client_or_exit()
     workspace = Path(config.workspace_dir())
 
@@ -1053,7 +1057,7 @@ def copy_run_cmd(
             except ApiError as exc:
                 typer.echo(f"✗ {r.get('id')}: {exc.message}"); continue
             _wrote(paths); total += len(paths)
-        render.note(f"Copied {len(runs)} run(s) to {workspace / 'runs'}")
+        render.note(f"Copied {len(runs)} run(s) to {workspace / 'logs' / 'workflow'}")
         return
 
     if not ref:
@@ -1502,6 +1506,101 @@ def update_key_cmd(
         typer.echo(f"✗ {exc.message}")
         raise typer.Exit(code=1)
     typer.echo(f"✓ Updated key '{updated.get('name')}' (id {updated.get('id')})")
+
+
+def _workflows_using_key(client, credential_id) -> list[str]:
+    """Names of the workflows whose nodes use this key (the list endpoint has no
+    graphs, so each workflow's detail is fetched, a few at a time)."""
+    items = resources.list_workflows_full(client)
+    names: list[str] = []
+    for start in range(0, len(items), 8):
+        batch = items[start:start + 8]
+        details = runner.fetch_parallel(
+            *[(lambda wid=w["id"]: resources.get_workflow_detail(client, wid)) for w in batch])
+        names += [wf.get("name") or str(wf.get("id")) for wf in details
+                  if str(credential_id) in resources.workflow_credential_ids(wf or {})]
+    return names
+
+
+@move_app.command("key")
+def move_key_cmd(
+    ref: str = typer.Argument(..., help="Credential (key) name or id."),
+    to: str = typer.Option(..., "--to", help="Vault (name or id) to move it to."),
+    vault: str = typer.Option(None, "--vault", help="The key's current vault (name or id) — for a name shared across vaults."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Move a key (credential) to another vault. Its secrets move with it, unseen.
+
+    Refused while a server uses the key, since a server's key must be in the server's own vault: attach another key first (sagex update server <name> --key <key>, or --unlink-key). Workflows whose nodes use the key are listed. They name its old vault, so they fail until those nodes are updated. Asks first unless --yes.
+    """
+    client = _client_or_exit()
+    try:
+        vaults = resources.list_vaults_full(client)
+        source = resources.pick_vault(vaults, vault) if vault else None
+        target = resources.pick_vault(vaults, to)
+    except resources.AmbiguousResource as exc:
+        render.ambiguous(exc)
+        raise typer.Exit(code=1)
+    except resources.ResourceNotFound as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    if source is not None:
+        cred = resources.find_credential_in_vault(source, ref)
+        if not cred:
+            typer.echo(f"✗ No key '{ref}' in vault '{source.get('name')}'.")
+            raise typer.Exit(code=1)
+    else:
+        cred = _resolve_or_exit(resources.resolve_credential, client, ref, "key")
+    cred_id = str(cred.get("id"))
+    from_vault = next((v for v in vaults if str(v.get("id")) == str(cred.get("vault"))), {})
+    label = f"key '{cred.get('name')}'"
+
+    if str(target.get("id")) == str(cred.get("vault")):
+        typer.echo(f"{label.capitalize()} is already in vault '{target.get('name')}' — nothing to move.")
+        return
+    clash = resources.find_credential_in_vault(target, str(cred.get("name") or ""))
+    if clash:
+        typer.echo(f"✗ Vault '{target.get('name')}' already has a key named '{cred.get('name')}'. "
+                   f"Rename one first:  sagex rename key \"{cred.get('name')}\" <new name>")
+        raise typer.Exit(code=1)
+
+    users = [s for v in vaults for s in v.get("servers") or [] if str(s.get("credential") or "") == cred_id]
+    if users:
+        typer.echo(f"✗ {label.capitalize()} is attached to {len(users)} server(s), and a server's key "
+                   f"must be in the server's own vault:")
+        for s in users:
+            typer.echo(f"    {s.get('name')}   →  sagex update server \"{s.get('name')}\" --key <another key>  (or --unlink-key)")
+        raise typer.Exit(code=1)
+
+    try:
+        with render.run_activity(render.RunActivity("Checking which workflows use it", "")):
+            workflows = _workflows_using_key(client, cred_id)
+    except ApiError as exc:
+        typer.echo(f"✗ Couldn't check the workflows that use it: {exc.message}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Moving {label} from vault '{from_vault.get('name') or cred.get('vault')}' "
+               f"to vault '{target.get('name')}'.")
+    if workflows:
+        typer.echo(f"  {len(workflows)} workflow(s) use it and will fail until their nodes are "
+                   f"pointed at the new vault: {', '.join(workflows)}")
+    if not yes:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            typer.echo("✗ Pass --yes to move it without a confirmation prompt.")
+            raise typer.Exit(code=1)
+        if not typer.confirm("  Move it?"):
+            typer.echo("Aborted — nothing moved.")
+            raise typer.Exit(code=1)
+    try:
+        resources.move_credential(client, cred_id, target["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Moved {label} to vault '{target.get('name')}' (id {cred_id})")
 
 
 # ---------------------------------------------------------------------------
@@ -2741,14 +2840,22 @@ def _emit_run_event(view: "runview.WorkflowRunView", event: dict) -> None:
         print(runview.event_line(event), file=sys.stderr, flush=True)
 
 
-def _collect_workflow_inputs(specs: list[dict], raw: list[str]) -> tuple[dict, dict]:
+def _collect_workflow_inputs(specs: list[dict], raw: list[str], prior: dict | None = None,
+                             ask_again: set | None = None) -> tuple[dict, dict]:
     """Return (inputs to send keyed by parameter id, values to show keyed by label).
 
     --param takes a parameter name, or its id when a name repeats across nodes.
     Parameters not set keep the value saved in the workflow (and aren't sent);
     ones with no saved value are prompted for. Secrets are refused as flags, and
     parameters fed by another node's output can't be set.
+
+    For a rerun, `prior` holds the earlier run's values by parameter id (sent
+    again unless --param overrides them) and `ask_again` the secrets it was given:
+    the server only kept them masked, so they're asked for again at a hidden
+    prompt (blank keeps the workflow's saved value, if it has one).
     """
+    prior = prior or {}
+    ask_again = ask_again or set()
     manual = [s for s in specs if s["source"] == "manual"]
     by_id = {s["id"]: s for s in specs}
     name_count: dict[str, int] = {}
@@ -2796,6 +2903,24 @@ def _collect_workflow_inputs(specs: list[dict], raw: list[str]) -> tuple[dict, d
     for s in manual:
         if s["id"] in given:
             value = inputs[s["id"]] = given[s["id"]]
+        elif s["id"] in prior:
+            value = inputs[s["id"]] = prior[s["id"]]
+        elif s["id"] in ask_again:
+            if interactive:
+                keep = " — blank keeps the saved value" if s["default"] else ""
+                render.run_note(f"  {s['name']} was typed in for the earlier run{keep}.")
+                value = _prompt_input(s)
+                if value or not s["default"]:
+                    inputs[s["id"]] = value
+                else:
+                    value = s["default"]
+            elif s["default"]:
+                value = s["default"]
+                render.run_note(f"  {s['name']}: using the saved value (the earlier run's "
+                                f"can only be typed at a hidden prompt).")
+            else:
+                typer.echo(f"✗ '{s['name']}' is a secret and can only be typed at a hidden prompt — run this in a terminal.")
+                raise typer.Exit(code=1)
         elif s["default"]:
             value = s["default"]                     # saved in the workflow; not sent
         elif interactive:
@@ -2807,7 +2932,7 @@ def _collect_workflow_inputs(specs: list[dict], raw: list[str]) -> tuple[dict, d
             typer.echo(f"✗ No value for '{s['name']}'. Pass --param {ref_for(s)}=VALUE.")
             raise typer.Exit(code=1)
         label = s["name"] if name_count[s["name"].lower()] == 1 else f"{s['name']} ({s['nodes'][0]})"
-        shown[label] = "*****" if s["secret"] else value
+        shown[label] = "*****" if s["secret"] else str(value)    # a rerun's values may be numbers/bools
     return inputs, shown
 
 
@@ -2893,17 +3018,20 @@ def _iso_seconds(start: str | None, end: str | None) -> float | None:
 
 
 def _follow_workflow_run(client, run_id: str, view: "runview.WorkflowRunView",
-                         workspace: Path | None) -> int:
+                         workspace: Path | None, *, status: str = "queued",
+                         cancel_on_interrupt: bool = True) -> int:
     """Follow a workflow run live until it ends; return the CLI exit code.
 
     On a terminal, the run's graph stays pinned at the bottom and updates as nodes
     start and finish, while their output scrolls above it. The stream is live-only,
     so it reconnects if it ends early, and the run's node records are applied at the
     end (covering anything that streamed before we connected). Ctrl+C cancels the
-    run; a second Ctrl+C detaches.
+    run and a second Ctrl+C detaches — or, with cancel_on_interrupt=False (watching
+    a run someone else started), the first Ctrl+C just stops watching.
     """
-    state = {"status": "queued", "error": "", "current": "", "errors": 0, "stream": None}
-    activity = render.RunActivity("Queued — waiting for a worker", "ctrl+c to cancel")
+    state = {"status": status, "error": "", "current": "", "errors": 0, "stream": None}
+    hint = "ctrl+c to cancel" if cancel_on_interrupt else "ctrl+c to stop watching"
+    activity = render.RunActivity("Running" if status == "running" else "Queued — waiting for a worker", hint)
     started = time.monotonic()
     cancel_tried = detached = lost = False
     with render.run_activity(activity, above=view):
@@ -2918,7 +3046,7 @@ def _follow_workflow_run(client, run_id: str, view: "runview.WorkflowRunView",
                 render.run_note("Reconnecting to the live stream…")
                 time.sleep(1)
             except KeyboardInterrupt:
-                if cancel_tried:
+                if cancel_tried or not cancel_on_interrupt:
                     detached = True
                     break
                 cancel_tried = True
@@ -2942,8 +3070,11 @@ def _follow_workflow_run(client, run_id: str, view: "runview.WorkflowRunView",
 
     seconds = time.monotonic() - started
     if detached or lost:
-        why = "Detached — the run is still going" if detached else "Lost the live stream"
-        render.run_note(f"{why} (run {run_id}). Check it later:  sagex show run {run_id}")
+        if not detached:
+            why = "Lost the live stream"
+        else:
+            why = "Detached — the run is still going" if cancel_on_interrupt else "Stopped watching — the run is still going"
+        render.run_note(f"{why} (run {run_id}). Follow it again:  sagex watch {run_id}")
         return 130 if detached else 1
 
     # Apply the run's node records (the authoritative final state), show the final
@@ -3028,15 +3159,202 @@ def run_workflow_cmd(
 
 
 def _watch_new_run(client, wf: dict, run_id: str, shown: dict, no_log: bool,
-                   via: str | None = None) -> int:
-    """Print the run header, then follow the run live; returns the CLI exit code."""
+                   via: str | None = None, existing: tuple[dict, list] | None = None) -> int:
+    """Print the run header, then follow the run live; returns the CLI exit code.
+
+    `existing` = (run, node records) attaches to a run that's already under way:
+    the graph starts from where it is, and Ctrl+C stops watching instead of
+    cancelling a run this command didn't start.
+    """
     view = runview.WorkflowRunView.from_workflow(wf)
     render.workflow_run_header(wf.get("name") or "(workflow)", len(view.order), shown, via)
     if os.environ.get("SAGEX_EVENTS") == "1":
         print(runview.event_line({"t": "start", "run_id": run_id, "view": view.snapshot()}),
               file=sys.stderr, flush=True)
     workspace = None if no_log else Path(config.workspace_dir())
-    return _follow_workflow_run(client, run_id, view, workspace)
+    if existing is None:
+        return _follow_workflow_run(client, run_id, view, workspace)
+    run, nodes = existing
+    for event in _node_events(nodes):
+        _emit_run_event(view, event)
+    _emit_run_event(view, {"t": "run", "status": run.get("status")})
+    if any(n.get("status") not in (None, "pending") for n in nodes):
+        render.run_note("Output from before you attached isn't replayed; the saved logs have all of it.")
+    return _follow_workflow_run(client, run_id, view, workspace,
+                                status=run.get("status") or "queued", cancel_on_interrupt=False)
+
+
+def _node_events(nodes: list[dict]) -> list[dict]:
+    """Graph events for a run's node records so far (a running node carries how
+    long it has been running, so its clock doesn't restart at zero)."""
+    now = datetime.now(timezone.utc)
+    events = []
+    for n in nodes:
+        status = n.get("status")
+        if not status or status == "pending":
+            continue
+        event = {"t": "node", "id": n.get("node_id"), "status": status, "exit_code": n.get("exit_code")}
+        if status == "running":
+            started = _parse_iso(n.get("started_at"))
+            if started:
+                event["elapsed"] = max((now - started).total_seconds(), 0.0)
+        else:
+            event["duration"] = _iso_seconds(n.get("started_at"), n.get("finished_at"))
+        events.append(event)
+    return events
+
+
+def _run_label(run: dict) -> str:
+    """'3f2a9c1e (Deploy, running)' — how the run commands name a run."""
+    return f"{str(run.get('id') or '')[:8]} ({run.get('workflow_name') or 'workflow'}, {run.get('status') or 'unknown'})"
+
+
+def _run_workflow_or_exit(client, run: dict) -> dict:
+    """The current graph of a run's workflow, or exit if the workflow is gone."""
+    try:
+        return resources.get_workflow_detail(client, run.get("workflow_id"))
+    except ApiError as exc:
+        if exc.status == 404:
+            typer.echo(f"✗ The workflow of run {_run_label(run)} no longer exists.")
+        else:
+            typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+
+def _shown_run_inputs(specs: list[dict], inputs: dict | None) -> dict:
+    """An existing run's inputs by parameter name, for its header (secrets stay masked)."""
+    by_id = {s["id"]: s for s in specs}
+    shown = {}
+    for pid, value in (inputs or {}).items():
+        spec = by_id.get(pid)
+        if spec is not None:
+            shown[spec["name"]] = "*****" if spec["secret"] else str(value)
+    return shown
+
+
+def _rerun_inputs(specs: list[dict], inputs: dict | None) -> tuple[dict, set, int]:
+    """(values to send again, secrets to ask for again, how many were left out) from
+    an earlier run's recorded inputs. Only parameters the workflow still takes by
+    hand are reused; the server stored secrets as '*****', which must never be
+    sent back as if it were the password."""
+    manual = {s["id"]: s for s in specs if s["source"] == "manual"}
+    prior: dict = {}
+    ask_again: set = set()
+    dropped = 0
+    for pid, value in (inputs or {}).items():
+        spec = manual.get(pid)
+        if spec is None:
+            dropped += 1
+        elif spec["secret"] and value:
+            ask_again.add(pid)
+        elif value is not None:
+            prior[pid] = value
+    return prior, ask_again, dropped
+
+
+@app.command("rerun")
+def rerun_cmd(
+    ref: str = typer.Argument(..., help="Run id (or an id prefix) to run again."),
+    params: list[str] = typer.Option(None, "--param", "-p", help="Change a parameter as NAME=VALUE (or PARAM_ID=VALUE when a name repeats across nodes). Repeatable; secrets are asked for at a hidden prompt."),
+    notify: str = typer.Option(None, "--notify", help="Email this address when the run finishes."),
+    no_log: bool = typer.Option(False, "--no-log", help="Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."),
+) -> None:
+    """Run a workflow again with an earlier run's inputs, and follow it live.
+
+    Starts a new manual run of that run's workflow (as the workflow is now), sending the earlier run's parameter values again; --param changes one. Secrets it was given are asked for again at a hidden prompt, because Autosage keeps them only masked. Ctrl+C cancels the new run (press it again to detach). The logs are saved under <workspace>/logs/workflow/<run_id>/ when it ends.
+    """
+    if notify is not None and "@" not in notify:
+        typer.echo("✗ --notify needs an email address.")
+        raise typer.Exit(code=1)
+
+    client = _client_or_exit()
+    with _setup_errors(), render.run_activity(render.RunActivity("Looking up the run", "ctrl+c to cancel")):
+        prior_run = resources.resolve_run(client, ref)
+    wf = _run_workflow_or_exit(client, prior_run)
+
+    specs = runner.workflow_params(wf.get("nodes"))
+    prior, ask_again, dropped = _rerun_inputs(specs, prior_run.get("inputs"))
+    if dropped:
+        render.run_note(f"  {dropped} input(s) of the earlier run no longer match a parameter of "
+                        f"'{wf.get('name')}'; left out.")
+    inputs, shown = _collect_workflow_inputs(specs, params or [], prior, ask_again)
+    payload = {"inputs": inputs, "send_email": bool(notify), "user_email": notify or ""}
+
+    try:
+        with render.run_activity(render.RunActivity("Starting the run", "")):
+            queued = resources.trigger_workflow_run(client, wf["id"], payload) or {}
+    except KeyboardInterrupt:
+        typer.echo("Interrupted — the run may already be queued. Check:  sagex list run", err=True)
+        raise typer.Exit(code=130)
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")
+        raise typer.Exit(code=1)
+
+    run_id = str(queued.get("workflow_run_id") or "")
+    if not run_id:
+        typer.echo("✗ The server didn't return a run id.")
+        raise typer.Exit(code=1)
+    via = f"rerun of {str(prior_run.get('id') or '')[:8]}"
+    raise typer.Exit(code=_watch_new_run(client, wf, run_id, shown, no_log, via=via))
+
+
+@app.command("watch")
+def watch_cmd(
+    ref: str = typer.Argument(..., help="Run id (or an id prefix) to follow."),
+    no_log: bool = typer.Option(False, "--no-log", help="Don't save the run's logs under <workspace>/logs/workflow/<run_id>/."),
+) -> None:
+    """Follow a workflow run that's already going, live, node by node.
+
+    For a run started anywhere: the web app, a trigger, Sage or another terminal. The graph starts with the nodes already done. Ctrl+C stops watching; the run keeps going. A run that has already finished is shown as it ended. The logs are saved under <workspace>/logs/workflow/<run_id>/ when it ends.
+    """
+    client = _client_or_exit()
+    with _setup_errors(), render.run_activity(render.RunActivity("Looking up the run", "ctrl+c to cancel")):
+        run = resources.resolve_run(client, ref)
+        nodes = resources.get_run_nodes(client, run["id"])
+
+    status = run.get("status")
+    if status in _RUN_FINISHED:
+        render.run(run, nodes)
+        render.note(f"This run already {'succeeded' if status == 'success' else status} — nothing to follow. "
+                    f"Its logs:  sagex show run {str(run.get('id'))[:8]} --logs")
+        raise typer.Exit(code=0 if status == "success" else (130 if status == "cancelled" else 1))
+
+    wf = _run_workflow_or_exit(client, run)
+    shown = _shown_run_inputs(runner.workflow_params(wf.get("nodes")), run.get("inputs"))
+    via = f"run {str(run.get('id'))[:8]} · started {relative_time(run.get('created_at'))}"
+    raise typer.Exit(code=_watch_new_run(client, wf, str(run["id"]), shown, no_log, via=via,
+                                         existing=(run, nodes)))
+
+
+@app.command("cancel")
+def cancel_cmd(
+    ref: str = typer.Argument(..., help="Run id (or an id prefix) to cancel."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Cancel a queued or running workflow run.
+
+    The node running now is stopped and the rest don't run. Asks first unless --yes.
+    """
+    client = _client_or_exit()
+    run = _resolve_or_exit(resources.resolve_run, client, ref, "run")
+    status = run.get("status")
+    if status not in ("queued", "running"):
+        typer.echo(f"Run {_run_label(run)} has already finished — nothing to cancel.")
+        raise typer.Exit(code=0 if status == "cancelled" else 1)
+    if not yes:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            typer.echo("✗ Pass --yes to cancel without a confirmation prompt.")
+            raise typer.Exit(code=1)
+        started = relative_time(run.get("started_at") or run.get("created_at"))
+        if not typer.confirm(f"Cancel run {_run_label(run)}, started {started}?"):
+            typer.echo("Aborted — the run keeps going.")
+            raise typer.Exit(code=1)
+    try:
+        resources.cancel_workflow_run(client, run["id"])
+    except ApiError as exc:
+        typer.echo(f"✗ {exc.message}")       # e.g. it finished in the meantime
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ Cancelled run {str(run.get('id'))} ({run.get('workflow_name') or 'workflow'}).")
 
 
 def _parse_iso(iso: str | None) -> datetime | None:
